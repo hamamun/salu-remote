@@ -345,6 +345,7 @@ Look up your symptom, try the fix, and if it still fails send me the two things 
 | Everything worked yesterday, dead today | The PC's IP changed (the router reassigned it). Open the PC's Remote panel, read the new address, and type it into the app's *PC address* box. |
 | Red text in Android Studio under a file | Send me a screenshot of the file name and the red line. Do not "fix" it yourself. |
 | The build fails with `Java heap space` | Tell me — I will give you the one-line change for `android/gradle.properties`. |
+| Build stops with `Error: Gradle build failed due to Java/Gradle incompatibility` (and a bare version like `25.0.3` under `What went wrong:`) | Your Java is newer than the Gradle this repo pins (8.10.2 needs **Java 17–23**). Not a code problem — follow **README → “Build fails: Gradle build failed due to Java/Gradle incompatibility”**, Fix 1 (`flutter config --jdk-dir` → Android Studio's `jbr`, then `flutter clean`). |
 
 ---
 

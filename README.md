@@ -69,3 +69,35 @@ flutter create --platforms=windows .
 ```
 
 Then `windows/` folder will be generated and `flutter run -d windows` will work. For the SALU Remote phone app you don't need this — keep it Android-only.
+
+### Warnings: `A restricted method in java.lang.System has been called` during Gradle build
+
+You will see this when running on your phone:
+
+```
+WARNING: A restricted method in java.lang.System has been called
+WARNING: java.lang.System::load has been called by net.rubygrapefruit.platform.internal.NativeLibraryLoader
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning
+```
+
+**This is NOT an error — it's a harmless warning from Gradle 9 + Java 21/24.** Your app is still building. The first `assembleDebug` can take **5-15 minutes** downloading dependencies.
+
+Just **wait**. After the warnings you should see:
+
+```
+✓ Built build/app/outputs/flutter-apk/app-debug.apk
+Installing build/app/outputs/flutter-apk/app-debug.apk...
+```
+
+If the build hangs for >20 min or ends with a real error (red text `FAILURE` or `Exception`), copy the last 50 lines and send them.
+
+**Fix already applied in this repo:** `android/settings.gradle.kts` now uses AGP `8.7.3` + Kotlin `2.1.0` and `gradle-wrapper.properties` uses Gradle `8.10.2` — the stable combo that removes the warning. After pulling:
+
+```bash
+cd salu-remote
+flutter clean
+flutter pub get
+# delete old gradle cache if you had 9.3.1 before:
+# On Windows: rmdir /s /q %USERPROFILE%\.gradle\wrapper\dists\gradle-9.3.1-all
+flutter run -d ZPFU9LU8AEFISWPV
+```

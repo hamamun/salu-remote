@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../core/client.dart';
@@ -79,13 +80,13 @@ class _TuneTabState extends State<TuneTab> {
       // mpv is not in the picture in Web mode: no equalizer, no subtitle
       // track, no audio track. What there is, is a page — and a D-pad for it.
       if (SaluClient.instance.supports('web_key')) {
-        return const ListView(padding: EdgeInsets.all(16), children: <Widget>[
+        return ListView(padding: const EdgeInsets.all(16), children: const <Widget>[
           DPad(),
         ]);
       }
-      return const ListView(
-        padding: EdgeInsets.all(16),
-        children: <Widget>[
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: const <Widget>[
           EmptyState(message: 'Nothing to adjust in the browser.'),
         ],
       );

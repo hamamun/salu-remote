@@ -40,23 +40,28 @@ class _QrScanScreenState extends State<QrScanScreen> {
   void initState() {
     super.initState();
     _controller = MobileScannerController(
-      facing: MobileScannerCameraFacing.back,
+      facing: CameraFacing.back,
       detectionSpeed: DetectionSpeed.normal,
+      autoStart: false,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_startCamera()));
   }
 
   Future<void> _startCamera() async {
-    if (!mounted || !_controller.hasCameraAccess) {
-      await _controller.requestCameraPermission();
+    try {
+      await _controller.start();
+      if (!mounted) return;
+      setState(() {
+        _cameraReady = true;
+        _cameraDenied = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _cameraReady = false;
+        _cameraDenied = true;
+      });
     }
-    if (!mounted) return;
-    final bool ready = _controller.hasCameraAccess;
-    setState(() {
-      _cameraReady = ready;
-      _cameraDenied = !ready;
-    });
-    if (ready) await _controller.start();
   }
 
   void _onDetect(BarcodeCapture capture) {
@@ -162,7 +167,7 @@ class _ViewfinderPainter extends CustomPainter {
     final Path dimmed = Path()
       ..addRect(Offset.zero & size)
       ..addRRect(RRect.fromRectAndRadius(cutout, const Radius.circular(18)))
-      ..fillType = FillType.evenOdd;
+      ..fillType = PathFillType.evenOdd;
     canvas.drawPath(dimmed, Paint()..color = const Color(0x99000000));
     canvas.drawRRect(
       RRect.fromRectAndRadius(cutout, const Radius.circular(18)),

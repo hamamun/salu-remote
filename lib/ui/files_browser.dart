@@ -86,7 +86,7 @@ class _FilesBrowserState extends State<FilesBrowser> {
 
   // Select mode (long-press anywhere → checkboxes, select-all, bottom bar).
   bool _selecting = false;
-  final Set<String> _selected = <String>{};
+  Set<String> _selected = <String>{};
 
   String get _filter => widget.subtitleMode ? 'subs' : _showAll ? 'all' : 'media';
   String get _path => _crumbs.isEmpty ? '' : _crumbs.last.path;
@@ -142,7 +142,10 @@ class _FilesBrowserState extends State<FilesBrowser> {
   List<FsPlace> _parsePlaces(RemoteReply reply) {
     final Object? raw = reply['places'] ?? reply['entries'];
     if (raw is! List) return const <FsPlace>[];
-    return raw.whereType<Map>().map(FsPlace.from).toList();
+    return raw
+        .whereType<Map>()
+        .map((Map m) => FsPlace.from(m.cast<String, Object?>()))
+        .toList();
   }
 
   Future<void> _loadFirstPage() async {
@@ -431,16 +434,18 @@ class _FilesBrowserState extends State<FilesBrowser> {
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: Row(
         children: <Widget>[
+          const Text('Media only', style: TextStyle(fontSize: 13)),
+          const SizedBox(width: 8),
           Switch(
             value: !_showAll,
             onChanged: (bool v) => _toggleFilter(!v, _showSystem),
-            title: const Text('Media only', style: TextStyle(fontSize: 13)),
           ),
+          const SizedBox(width: 16),
+          const Text('Hidden folders', style: TextStyle(fontSize: 13)),
           const SizedBox(width: 8),
           Switch(
             value: _showSystem,
             onChanged: (bool v) => _toggleFilter(_showAll, v),
-            title: const Text('Hidden folders', style: TextStyle(fontSize: 13)),
           ),
         ],
       ),
@@ -644,7 +649,7 @@ class _FilesBrowserState extends State<FilesBrowser> {
     final IconData icon;
     final Color iconColor;
     if (widget.subtitleMode) {
-      icon = isDir ? Icons.folder : Icons.cc;
+      icon = isDir ? Icons.folder : Icons.subtitles;
       iconColor = isDir ? AppColors.iconIdle : AppColors.accent;
     } else if (isDir) {
       icon = Icons.folder_outlined;

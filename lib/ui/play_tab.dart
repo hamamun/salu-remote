@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 // `RepeatMode` below is the protocol enum from core/models.dart,
 // not Flutter's animation one.
 import 'package:flutter/material.dart' hide RepeatMode;
@@ -198,18 +199,18 @@ class _PlayerBody extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        _nowPlaying(),
+        _nowPlaying(context),
         const SizedBox(height: 14),
-        _transport(),
+        _transport(context),
         if (!focusMode && RemotePrefs.instance.isShown(PlaySection.chips)) ...<Widget>[
           const SizedBox(height: 14),
-          _chips(),
+          _chips(context),
         ],
         // Focus mode keeps the volume row (it is part of "eyes closed") —
         // only the chips and the queue card hide.
         if (RemotePrefs.instance.isShown(PlaySection.volume)) ...<Widget>[
           const SizedBox(height: 14),
-          _volume(),
+          _volume(context),
         ],
         if (!focusMode &&
             RemotePrefs.instance.isShown(PlaySection.queue) &&
@@ -221,7 +222,7 @@ class _PlayerBody extends StatelessWidget {
     );
   }
 
-  Widget _nowPlaying() {
+  Widget _nowPlaying(BuildContext context) {
     final SaluPlayback playback = snapshot.playback;
     return SaluCard(
       child: Column(
@@ -278,7 +279,7 @@ class _PlayerBody extends StatelessWidget {
     );
   }
 
-  Widget _transport() {
+  Widget _transport(BuildContext context) {
     final bool playing = snapshot.playback.isPlaying;
     return SaluCard(
       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
@@ -320,7 +321,7 @@ class _PlayerBody extends StatelessWidget {
     );
   }
 
-  Widget _chips() {
+  Widget _chips(BuildContext context) {
     final SaluPlayback playback = snapshot.playback;
     return Wrap(
       spacing: 8,
@@ -363,7 +364,7 @@ class _PlayerBody extends StatelessWidget {
     );
   }
 
-  Widget _volume() {
+  Widget _volume(BuildContext context) {
     final SaluPlayback playback = snapshot.playback;
     return SaluCard(
       padding: const EdgeInsets.fromLTRB(6, 6, 16, 6),

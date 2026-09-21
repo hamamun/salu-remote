@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../core/client.dart';
@@ -32,7 +33,6 @@ class SubtitlesPane extends StatefulWidget {
 class _SubtitlesPaneState extends State<SubtitlesPane> {
   final SaluClient _client = SaluClient.instance;
   SubsInfo? _info;
-  bool _loading = false;
   String? _error;
 
   @override
@@ -64,7 +64,6 @@ class _SubtitlesPaneState extends State<SubtitlesPane> {
 
   Future<void> _load() async {
     setState(() {
-      _loading = _info == null;
       _error = null;
     });
     final RemoteReply reply = await _client.subsGet();
@@ -72,11 +71,9 @@ class _SubtitlesPaneState extends State<SubtitlesPane> {
     if (reply.ok) {
       setState(() {
         _info = SubsInfo.from(reply.data);
-        _loading = false;
       });
     } else {
       setState(() {
-        _loading = false;
         _error = reply.message;
       });
     }
@@ -340,7 +337,7 @@ class _SubtitlesPaneState extends State<SubtitlesPane> {
                     track.title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 14,
                       fontWeight: track.selected ? FontWeight.w600 : FontWeight.w400,
                     ),

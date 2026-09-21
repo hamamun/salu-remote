@@ -114,23 +114,29 @@ class RemotePrefs {
   /// Focus mode is remembered per device (`remote_apk_ui.md` §3).
   bool get focusMode => _store?.getBool(_kFocus) ?? false;
 
-  Future<void> setFocusMode(bool value) async => _store?.setBool(_kFocus, value);
+  Future<void> setFocusMode(bool value) async {
+    await _store?.setBool(_kFocus, value);
+  }
 
   int get lastTab => _store?.getInt(_kTab) ?? 0;
 
-  Future<void> setLastTab(int index) async => _store?.setInt(_kTab, index);
+  Future<void> setLastTab(int index) async {
+    await _store?.setInt(_kTab, index);
+  }
 
   /// The Play-screen checklist. Default: everything visible — ship complete,
   /// let people subtract (`remote_apk_ui.md` §3).
   bool isShown(String key) => _store?.getBool('$_kHidden$key') ?? true;
 
-  Future<void> setShown(String key, bool value) async =>
-      _store?.setBool('$_kHidden$key', value);
+  Future<void> setShown(String key, bool value) async {
+    await _store?.setBool('$_kHidden$key', value);
+  }
 
   bool isCollapsed(String key) => _store?.getBool('$_kHidden collapsed:$key') ?? false;
 
-  Future<void> setCollapsed(String key, bool value) async =>
-      _store?.setBool('$_kHidden collapsed:$key', value);
+  Future<void> setCollapsed(String key, bool value) async {
+    await _store?.setBool('$_kHidden collapsed:$key', value);
+  }
 }
 
 /// The keys the Play-screen checklist understands (`remote_apk_ui.md` §3).

@@ -100,7 +100,7 @@ class SaluPlayback {
       duration: Duration(milliseconds: _i(map['duration'])),
       buffering: _b(map['buffering']),
       seekable: _b(map['seekable']),
-      volume: _i(map['volume']).clamp(0, 100),
+      volume: _i(map['volume']).clamp(0, 100).toInt(),
       muted: _b(map['muted']),
       shuffle: _b(map['shuffle']),
       repeat: _enumOf<RepeatMode>(RepeatMode.values, map['repeat'], RepeatMode.off),
@@ -763,7 +763,7 @@ class WebMediaInfo {
         playing: _b(raw['playing']),
         position: Duration(milliseconds: (_d(raw['position']) * 1000).round()),
         duration: Duration(milliseconds: (_d(raw['duration']) * 1000).round()),
-        volume: (_d(raw['volume']) * 100).round().clamp(0, 100),
+        volume: (_d(raw['volume']) * 100).round().clamp(0, 100).toInt(),
         muted: _b(raw['muted']),
         canFullscreen: _b(raw['canFull']),
       );

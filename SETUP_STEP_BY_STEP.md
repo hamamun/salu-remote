@@ -152,8 +152,14 @@ and `lib/main.dart`.
 
 ## Part 4 · The three Android edits (10 min)
 
-Do these **on your computer**, in Android Studio — it underlines mistakes as you type, which
-the web page cannot.
+**Repository status:** these Android edits have already been applied to the current
+`salu-remote` checkout. If you cloned or pulled this repository after that change, do not
+paste the examples below over them again. Instead, verify that the files contain the
+permissions, `minSdk = 24`, and `keepAwake` channel shown below, then continue to Part 5.
+
+The examples remain here as a reference in case your local checkout is older. Do these
+**on your computer**, in Android Studio — it underlines mistakes as you type, which the
+web page cannot.
 
 Open Android Studio → `File` → `Open…` → choose your `salu-remote` folder.
 
@@ -286,10 +292,17 @@ class MainActivity : FlutterActivity() {
 
 ## Part 5 · Run it and pair with SALU
 
-### 5.1 Start the app on your phone
+### 5.1 Get dependencies and start the app on your phone
 
-In Android Studio: pick your phone in the device dropdown at the top, then press the green
-**Run ▶**. First build is slow (2–5 minutes); after that, seconds.
+Because this checkout now uses `shared_preferences` to remember the pairing, run this once
+in Android Studio's Terminal (from the repository root):
+
+```bash
+flutter pub get
+```
+
+Then pick your phone in the device dropdown at the top and press the green **Run ▶**.
+First build is slow (2–5 minutes); after that, seconds.
 
 You should see a dark screen titled **SALU Remote** with a **Connect to your PC** card and
 two boxes: *PC address* and *Pairing code*.

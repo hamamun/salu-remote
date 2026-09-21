@@ -1,6 +1,8 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+// `RepeatMode` below is the protocol enum from core/models.dart,
+// not Flutter's animation one.
+import 'package:flutter/material.dart' hide RepeatMode;
 
 import 'core/client.dart';
 import 'core/error_copy.dart';

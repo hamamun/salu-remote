@@ -155,7 +155,7 @@ class _QueueCardState extends State<QueueCard> {
                       child: ListView.separated(
                         controller: _scroll,
                         itemCount: _rows.length,
-                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        separatorBuilder: (_, _) => const Divider(height: 1),
                         itemBuilder: (BuildContext context, int i) =>
                             _row(context, _rows[i]),
                       ),

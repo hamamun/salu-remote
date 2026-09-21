@@ -194,7 +194,7 @@ class _SectionCardState extends State<SectionCard> {
   late bool _expanded =
       widget.memoryKey == null
           ? widget.expandedByDefault
-          : !RemotePrefs.instance.isCollapsed(widget.memoryKey);
+          : !RemotePrefs.instance.isCollapsed(widget.memoryKey!);
 
   @override
   Widget build(BuildContext context) {

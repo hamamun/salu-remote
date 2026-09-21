@@ -114,7 +114,7 @@ class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
   }
 
   void _openConnectSheet({PairLink? prefill}) {
-    if (Navigator.of(context).modalRoute.isPresented) return;
+    if (ModalRoute.of(context)?.isCurrent != true && prefill == null) return;
     ConnectSheet.show(context, prefill: prefill);
   }
 

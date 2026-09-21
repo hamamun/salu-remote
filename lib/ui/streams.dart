@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -50,10 +51,12 @@ class _StreamsPaneState extends State<StreamsPane> {
   }
 
   Future<void> _refresh() async {
-    if (mounted) setState(() {
-      _loading = _info == null;
-      _error = null;
-    });
+    if (mounted) {
+      setState(() {
+        _loading = _info == null;
+        _error = null;
+      });
+    }
     final RemoteReply reply = await _client.libraryGet();
     if (!mounted) return;
     if (reply.ok && reply['entries'] is List) {
@@ -303,7 +306,7 @@ class _StreamsPaneState extends State<StreamsPane> {
                   child: ListView.separated(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                     itemCount: info.entries.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    separatorBuilder: (_, _) => const Divider(height: 1),
                     itemBuilder: (BuildContext context, int i) =>
                         _row(info.entries[i]),
                   ),

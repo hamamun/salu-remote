@@ -78,7 +78,10 @@ class _SubsSearchScreenState extends State<SubsSearchScreen> {
     if (reply.ok) {
       final Object? raw = reply['results'] ?? reply['rows'];
       final List<SubtitleRow> rows = raw is List
-          ? raw.whereType<Map>().map(SubtitleRow.from).toList()
+          ? raw
+              .whereType<Map>()
+              .map((Map m) => SubtitleRow.from(m.cast<String, Object?>()))
+              .toList()
           : const <SubtitleRow>[];
       setState(() {
         _results = rows;

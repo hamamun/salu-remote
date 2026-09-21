@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../core/client.dart';
@@ -163,7 +164,7 @@ class _AudioTracksPaneState extends State<AudioTracksPane> {
                                   track.title,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 14,
                                     fontWeight: track.selected ? FontWeight.w600 : FontWeight.w400,
                                   ),

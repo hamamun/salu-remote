@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -171,15 +172,13 @@ class _WebBodyState extends State<WebBody> {
         IconButton(
           tooltip: pageFullscreen ? 'Page fullscreen' : 'Fullscreen',
           onPressed: pageFullscreen
-              ? (media?.canFullscreen ?? false)
+              ? (_media?.canFullscreen ?? false)
                   ? () => unawaited(_guarded(_client.webMediaFullscreen))
                   : null
               : () => unawaited(runRemote(context, _client.fullscreenToggle)),
           icon: Icon(
             pageFullscreen
-                ? (media?.canFullscreen ?? false)
-                    ? Icons.fullscreen
-                    : Icons.fullscreen_disabled
+                ? (web.fullscreen ? Icons.fullscreen_exit : Icons.fullscreen)
                 : (widget.snapshot.window.fullscreen ? Icons.fullscreen_exit : Icons.fullscreen),
             color: AppColors.iconIdle,
           ),
@@ -282,7 +281,7 @@ class _WebBodyState extends State<WebBody> {
               IconButton(
                 tooltip: media.muted ? 'Unmute' : 'Mute',
                 onPressed: () =>
-                    unawaited(_guarded(() => _client.webMediaMute(on: !media.muted))),
+                    unawaited(_guarded(() => _client.webMediaMute(!media.muted))),
                 icon: Icon(
                   media.muted ? Icons.volume_off : Icons.volume_up,
                   color: media.muted ? AppColors.statusDead : AppColors.iconIdle,
@@ -366,6 +365,7 @@ class _WebBodyState extends State<WebBody> {
     if (clipboard?.text case final String? clip when looksLikeUrl(clip ?? '')) {
       text.text = clip!;
     }
+    if (!mounted) return;
     try {
       await showDialog<void>(
         context: context,

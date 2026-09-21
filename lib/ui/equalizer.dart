@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../core/client.dart';
@@ -47,7 +48,6 @@ class _EqualizerPaneState extends State<EqualizerPane> {
   TuneInfo? _info;
   List<double> _gains = List<double>.filled(TuneInfo.bandCount, 0);
   int? _draggingBand;
-  bool _loading = false;
   String? _error;
 
   @override
@@ -70,7 +70,6 @@ class _EqualizerPaneState extends State<EqualizerPane> {
 
   Future<void> _load() async {
     setState(() {
-      _loading = _info == null;
       _error = null;
     });
     final RemoteReply reply = await _client.tuneGet();
@@ -80,11 +79,9 @@ class _EqualizerPaneState extends State<EqualizerPane> {
       setState(() {
         _info = info;
         _gains = info.curve;
-        _loading = false;
       });
     } else {
       setState(() {
-        _loading = false;
         _error = reply.message;
       });
     }
@@ -168,9 +165,9 @@ class _EqualizerPaneState extends State<EqualizerPane> {
       return const Center(child: CircularProgressIndicator());
     }
     if (!info.available) {
-      return const ListView(
-        padding: EdgeInsets.all(16),
-        children: <Widget>[
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: const <Widget>[
           EmptyState(message: 'Nothing to adjust yet.'),
         ],
       );
@@ -219,10 +216,11 @@ class _EqualizerPaneState extends State<EqualizerPane> {
                     child: const Text('Reset'),
                   ),
                   const Spacer(),
+                  const Text('Auto EQ', style: TextStyle(fontSize: 13)),
+                  const SizedBox(width: 8),
                   Switch(
                     value: info.autoEq,
                     onChanged: (bool v) => unawaited(_autoEq(v)),
-                    title: const Text('Auto EQ', style: TextStyle(fontSize: 13)),
                   ),
                 ],
               ),
@@ -272,12 +270,11 @@ class _EqualizerPaneState extends State<EqualizerPane> {
                           child: const Text('Reset'),
                         ),
                         const Spacer(),
+                        const Text('Auto EQ', style: TextStyle(fontSize: 13)),
+                        const SizedBox(width: 8),
                         Switch(
                           value: info.autoEq,
                           onChanged: (bool v) => unawaited(_autoEq(v)),
-                          title: const Text(
-                              'Auto EQ',
-                              style: TextStyle(fontSize: 13)),
                         ),
                       ],
                     ),
@@ -331,7 +328,7 @@ class _EqualizerPaneState extends State<EqualizerPane> {
               Padding(
                 padding: const EdgeInsets.only(right: 8),
                 child: SaluChip(
-                  icon: Icons.bars,
+                  icon: Icons.equalizer,
                   label: preset.label,
                   active: info.eqStop == preset.key,
                   onTap: () => unawaited(_preset(preset.key)),
@@ -435,7 +432,6 @@ class _SlidersRow extends StatelessWidget {
 
 class _BandSlider extends StatelessWidget {
   const _BandSlider({
-    super.key,
     required this.label,
     required this.value,
     required this.trackHeight,

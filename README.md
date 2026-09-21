@@ -20,6 +20,11 @@ three-tab interface (Play, Browse and Tune), after the first phone-to-PC test su
 
 ## Run from Android Studio
 
+Gradle in this checkout is pinned to the **Flutter 3.47 template set** — Gradle `9.3.1` + AGP `9.1.0`
++ Kotlin `2.4.0`, which runs on Java **17–25**. If your Java is 26+ (or you are on an old checkout
+still on Gradle 8.10.2), see
+[Troubleshooting § Java/Gradle incompatibility](#build-fails-gradle-build-failed-due-to-javagradle-incompatibility-java-2503).
+
 1. Open this repository as a Flutter project.
 2. Connect an Android phone with USB debugging enabled.
 3. From the repository root run `flutter pub get` once.
@@ -80,7 +85,11 @@ WARNING: java.lang.System::load has been called by net.rubygrapefruit.platform.i
 WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning
 ```
 
-**This is NOT an error — it's a harmless warning from Gradle 9 + Java 21/24.** Your app is still building. The first `assembleDebug` can take **5-15 minutes** downloading dependencies.
+**This is NOT an error — it's a harmless warning from Gradle 9 running on Java 24/25** (the JDK started restricting `System::load` from unnamed modules). Your app is still building. The first `assembleDebug` can take **5-15 minutes** downloading dependencies.
+
+> **But check the tail of the log.** The warning is only harmless if the build *continues*. If the
+> same log ends with `FAILURE: Build failed with an exception` / `Error: Gradle build failed due to
+> Java/Gradle incompatibility`, the JDK and Gradle really do disagree — see the next section.
 
 Just **wait**. After the warnings you should see:
 
@@ -91,13 +100,185 @@ Installing build/app/outputs/flutter-apk/app-debug.apk...
 
 If the build hangs for >20 min or ends with a real error (red text `FAILURE` or `Exception`), copy the last 50 lines and send them.
 
-**Fix already applied in this repo:** `android/settings.gradle.kts` now uses AGP `8.7.3` + Kotlin `2.1.0` and `gradle-wrapper.properties` uses Gradle `8.10.2` — the stable combo that removes the warning. After pulling:
+**Why you get it and why we keep it:** the warning can also be silenced by staying on Gradle 8.10.2
++ AGP 8.7.3 + Kotlin 2.1.0 — that is what this repo used to do, and it broke every machine on Java 24+
+(see below), while Flutter 3.41+ now *errors* on those three versions anyway. The repo is back on the
+Flutter template numbers; this warning is the cheap half of that trade. **Ignore it and wait** — the
+first `assembleDebug` after a Gradle bump is slow.
 
-```bash
-cd salu-remote
+### Build fails: `Gradle build failed due to Java/Gradle incompatibility` (Java 25.0.3)
+
+> **Already fixed in this checkout:** the build is on the Flutter 3.47 template set — Gradle `9.3.1`,
+> AGP `9.1.0`, Kotlin `2.4.0` — which runs on Java **17–25**. Pull and rebuild with
+> [the repo-side fix](#the-repo-side-fix-already-applied). Read on for why, and use the
+> [fallback](#fallback--keep-an-old-gradle-but-give-it-an-older-jdk) only for a checkout you are not
+> allowed to touch.
+
+Same log as the warning above, but the build stops. The giveaway is a `What went wrong:` block that
+contains nothing but a Java version number:
+
+```
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+25.0.3
+
+* Try:
+> Run with --stacktrace option to be more verbose.
+
+BUILD FAILED in 50s
+Error: Gradle build failed due to Java/Gradle incompatibility.
+The Java version used for the build is 25.0.3, which is incompatible with Gradle 8.10.2.
+```
+
+**What it means:** the JDK that Flutter hands to Gradle is newer than the Gradle the project pins can
+run on. Gradle prints the Java version as the entire error message — that is where the lone `25.0.3`
+line comes from.
+
+| Java version running Gradle | Oldest Gradle that supports it |
+|---|---|
+| 17 | 7.3 |
+| 21 | 8.5 |
+| 23 | 8.10 |
+| 24 | 8.14 |
+| 25 | 9.1.0 |
+| 26 | 9.4.0 |
+
+Source: [Gradle compatibility matrix](https://docs.gradle.org/current/userguide/compatibility.html#java).
+This is about the JVM that *runs Gradle*, **not** about `compileOptions` / `jvmTarget = 17` in
+`android/app/build.gradle.kts` — leave those at 17, they are your app's bytecode level.
+
+Downgrading Gradle is not a durable escape hatch either — Flutter's own `DependencyVersionChecker`
+picks its own fights. On **Flutter 3.47** it *errors* below Gradle `8.14.0`, AGP `8.11.1`, Kotlin
+`2.2.20` and *warns* below `9.1.0` / `9.0.1` / `2.3.20` (Flutter 3.44 was one notch more lenient:
+error floors `8.7.0` / `8.6.0` / `2.0.0`), while `gradle_utils.dart` caps what it knows at Gradle
+`9.3.1`, AGP `9.2`, KGP `2.4.0`. The set this repo now pins — `9.3.1` / `9.1.0` / `2.4.0` — is exactly
+the Flutter 3.47 template default, i.e. above every floor and inside every ceiling.
+
+One more thing in that log that is not yours: `I/flutter … NtLifecycle->scheduledWakeUp tag:KeepAlive,
+length:Instance of 'BluetoothHelper',Instance of 'NtWatchWorker'` is **not from SALU Remote** — nothing
+in `lib/` logs those tags. It is logcat noise from another app on the phone, printed while Gradle was
+working.
+
+#### The repo-side fix (already applied)
+
+Three pins move together and nothing else does:
+
+| File | Was | Now |
+|---|---|---|
+| `android/gradle/wrapper/gradle-wrapper.properties` | Gradle `8.10.2-all` | Gradle `9.3.1-all` |
+| `android/settings.gradle.kts` | AGP `8.7.3` | AGP `9.1.0` |
+| `android/settings.gradle.kts` | Kotlin `2.1.0` | Kotlin `2.4.0` |
+
+`9.3.1` is not arbitrary: AGP `9.1.x` requires Gradle ≥ `9.3.1`, Gradle ≥ `9.1.0` is what makes Java 25
+runnable, `9.3.1` is Flutter 3.47's newest known-good, and Gradle `9.6+` drops internal APIs AGP 8.x
+still used (irrelevant now, but it is why "just take the latest" was not chosen). No app code, manifest,
+`compileSdk` or `minSdk` change. `android.newDsl=false` and `android.builtInKotlin=false` in
+`android/gradle.properties` stay as they are — Flutter's own template ships those with AGP 9 so the
+legacy `android { }` / `kotlin { compilerOptions { jvmTarget } }` blocks keep working.
+
+Rebuild after pulling, from the repository root:
+
+```powershell
+git pull
 flutter clean
+cd android
+.\gradlew.bat --stop      # kill daemons still holding Gradle 8.10.2
+cd ..
 flutter pub get
-# delete old gradle cache if you had 9.3.1 before:
-# On Windows: rmdir /s /q %USERPROFILE%\.gradle\wrapper\dists\gradle-9.3.1-all
 flutter run -d ZPFU9LU8AEFISWPV
 ```
+
+Then in Android Studio: **File → Sync Project with Gradle Files** — or *Invalidate Caches… → Restart* if
+the editor still shows stale errors — and press **Run ▶**.
+
+What to expect on that first run:
+
+- Gradle downloads `9.3.1` (a few hundred MB) plus new AGP/Kotlin artifacts: **3–10 minutes**.
+- The `WARNING: A restricted method in java.lang.System has been called` lines come back. Harmless —
+  that is Gradle 9 on Java 24/25, and silencing it by downgrading is what broke the build.
+- Success is `✓ Built build\app\outputs\flutter-apk\app-debug.apk` followed by `Installing…`.
+- The old `gradle-8.10.2-all` folder under `%USERPROFILE%\.gradle\wrapper\dists\` is dead weight;
+  `rmdir /s /q` it whenever you like.
+
+If you instead get *"Failed to install the following Android SDK components"* or a complaint about
+*platform android-36* / *NDK 28.2*: Android Studio → **Settings → Languages & Frameworks → Android SDK**
+→ install **Android 16 (API 36)** (tick *Show Package Details* for the NDK), accept the licences:
+
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\cmdline-tools\latest\bin\sdkmanager.bat" --licenses
+```
+
+(use the SDK folder `flutter doctor --verbose` prints under *Android SDK at*) and run the build again.
+
+Optional, once, so the wrapper files themselves match the distribution (the 8.10.2 `gradle-wrapper.jar`
+works fine, this only keeps Android Studio from nagging):
+
+```powershell
+cd android
+.\gradlew.bat wrapper --gradle-version 9.3.1 --distribution-type all
+cd ..
+git diff --stat android/gradle android/gradlew   # then commit if it changed
+```
+
+To have Flutter audit a project's build versions instead of guessing (useful for other repos, and it
+is the same checker these pins came from):
+
+```bash
+flutter analyze --suggestions
+```
+
+#### Fallback — keep an old Gradle but give it an older JDK
+
+1. Find out which Java Flutter uses for Gradle:
+
+   ```bash
+   flutter doctor --verbose
+   ```
+
+   Under **Android toolchain** read `Java binary at:` and `Java version`. Flutter looks for a JDK in
+   this order: `jdk-folder` set by `flutter config` → **the JDK bundled with your newest Android
+   Studio** → `JAVA_HOME` → `java` on `PATH`. Because the Studio-bundled JDK beats `JAVA_HOME`,
+   changing `JAVA_HOME` alone often looks like it did nothing — which is why the fix is `flutter config`.
+   Java 25 there means either that bundled JBR *is* 25, or `JAVA_HOME` points at a JDK 25 you installed.
+
+2. Find a JDK whose version is 17–23 and note its folder:
+
+   ```powershell
+   & "C:\Program Files\Android\Android Studio\jbr\bin\java" -version    # newest Studio
+   & "$env:LOCALAPPDATA\Programs\Android Studio\jbr\bin\java" -version  # per-user Studio install
+   dir "C:\Program Files\Eclipse Adoptium","C:\Program Files\Java" -ErrorAction SilentlyContinue
+   ```
+
+   If every candidate is too new, install one side by side and leave `JAVA_HOME` / `PATH` untouched:
+   [Temurin 21 LTS MSI](https://adoptium.net/temurin/releases/?version=21). It must be a JDK, not a JRE
+   (`bin\javac.exe` has to exist).
+
+3. Tell Flutter to use it — one line covers the terminal *and* Android Studio's Run button, because
+   Studio only runs the same `flutter … run` command:
+
+   ```powershell
+   flutter config --jdk-dir "C:\Program Files\Eclipse Adoptium\jdk-21.0.5.11-hotspot"
+   ```
+
+   Prefer a JDK you installed over Studio's `jbr` where you can: Studio updates replace the bundled
+   JBR, so it moves to Java 26/27 whether you like it or not. To undo it, set the value to an empty
+   string (`flutter config --jdk-dir ""`) — `flutter config` has no per-setting "clear" flag.
+
+4. Same JDK in Studio, otherwise the Gradle tool window keeps showing red while the app builds fine:
+   **File → Settings → Build, Execution, Deployment → Build Tools → Gradle → Gradle JDK** → pick
+   `jbr-17` / `jbr-21` / *Specified JDK…* → **Apply**. Skip if you only ever press Run ▶.
+
+5. Clear daemons and rebuild: `flutter clean`, `.\gradlew.bat --stop` in `android/`, `flutter pub get`,
+   `flutter run`. `flutter doctor --verbose` should then report a Java the pinned Gradle supports.
+
+Machine-wide version of the same idea, for people who build from several terminals/IDEs: put it in
+your **user** Gradle properties — `%USERPROFILE%\.gradle\gradle.properties` (create if missing):
+
+```properties
+# forward slashes; the ":" after the drive letter must stay escaped
+org.gradle.java.home=C\:/Program Files/Eclipse Adoptium/jdk-21.0.5.11-hotspot
+```
+
+**Never** add that line to `android/gradle.properties`: that file is committed, and a
+`C:\Users\mamun\…` path in it breaks the build on every other machine.

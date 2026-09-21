@@ -156,7 +156,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         builder: (BuildContext context, LinkState state, _) =>
             ValueListenableBuilder<SaluSnapshot?>(
           valueListenable: _client.snapshot,
-          builder: (BuildContext context, SaluSnapshot? snapshot, __) {
+          builder: (BuildContext context, SaluSnapshot? snapshot, _) {
             return ListView(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
               children: <Widget>[

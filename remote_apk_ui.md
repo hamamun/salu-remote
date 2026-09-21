@@ -1,0 +1,621 @@
+# SALU Remote — APK Interface Design (v2, expanded scope)
+
+**Status:** 🎨 Design reference. The APK is a separate project, built later.
+**Companion:** `remote.md` — the PC side. Its **§17** lists exactly what the PC must
+add for everything described here.
+**Supersedes:** the v1 layout of this file (5 screens) — the scope grew, so the
+architecture changed. The rules and the visual language carried over unchanged.
+
+---
+
+## 1. What changed, and the one sentence that still decides everything
+
+The first version made the phone a plain transport remote. You have now added four
+things that all live **on the PC** — the file system, the stream library, the equalizer,
+and the subtitle engine — plus the Player/Web mode pair.
+
+> **The phone is a normal person's remote control for the PC.**
+> It never plays anything itself, never holds its own truth, and never requires the user
+> to walk over to the keyboard.
+
+That last clause is the new work. Every feature you added exists for one reason: **so you
+never have to get up.** Judge every design decision against that.
+
+**Everything still out of scope:** playing media on the phone, screen preview, album art
+or thumbnails over the network, delete/rename/move of files, and any cloud account.
+
+---
+
+## 2. The new shape: three tabs, by intent
+
+The v1 design (Connect · Remote · Queue · Send · Settings) was built for transport only.
+With EQ, subtitles and a file browser added, one scrolling page would become a junk
+drawer. So the app is now **three tabs, grouped by what the user is doing** — not by which
+data source they came from:
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  PLAY              BROWSE                    TUNE        │
+│  the everyday      find something to play    adjust what │
+│  remote            · Files (PC drives)       is playing   │
+│  · transport       · Streams (M3U + URL)     · Equalizer  │
+│  · now playing     (one segmented switch)    · Subtitles  │
+│  · volume                                    · Audio      │
+│  · mode pill                                 (segmented)  │
+│  · queue card                                            │
+└──────────────────────────────────────────────────────────┘
+```
+
+- **Play** — 90% of all use. One thumb, no scrolling needed in Focus mode.
+- **Browse** — "Files" and "Streams" are the same user intention (find something), so they
+  share a tab with a segmented switch at the top. This keeps the bottom bar at three items.
+- **Tune** — Equalizer, Subtitles and Audio are all "change what is happening right now",
+  and all three are meaningless when nothing is playing. Keeping them together lets the
+  tab say *"Nothing is playing"* in one place. The word **Tune** is borrowed from SALU's
+  own left/right panel, so the two apps share vocabulary.
+
+**The mini now-playing strip.** On **Browse** and **Tune**, a slim strip sits just above
+the bottom bar:
+
+```
+│ ▶  Big Buck Bunny        12:34 / 45:12   ⏸ │
+```
+
+Tap it → jump to **Play**. The pause button works without leaving the screen. This one
+strip removes most of the reason to switch tabs mid-movie.
+
+### 2.1 What each mode offers (added 2026-09-20)
+
+The three tabs are not equally available in both modes, and pretending otherwise
+produces buttons that do nothing:
+
+| Tab | Player mode | Web mode |
+|---|---|---|
+| **Play** | transport · volume · queue | page nav · the page's own player (§4.2) |
+| **Browse** | Files · Streams | **disabled** — greyed, with the reason on tap |
+| **Tune** | Equalizer · Subtitles · Audio | **a D-pad** (§6.0) |
+
+**Browse is Player-only** because opening a PC file pulls the PC straight back to
+Player mode anyway (D8) — the tab would only ever bounce the user. It greys out
+rather than vanishing, so the bar does not reshuffle under the thumb, and tapping
+it says why. Switching into Web mode while Browse is up moves the user to Play.
+
+The **mode switch shows both seats** — `Player` and `Web` side by side, not one
+pill that toggles. You should be able to see where you are going before you go.
+
+**Connect** stops being a screen most of the time: it is a **sheet** that slides up only
+when a connection is missing or the user taps the header. First launch = the Connect
+sheet; every launch after that = straight to Play, already connected.
+
+---
+
+## 3. The space system — how showing/hiding actually works
+
+You asked for show/hide. Space is the scarcest thing on a phone, so there are four
+separate mechanisms, in this order of importance:
+
+**1 · Focus mode (the big one).** A chevron in the header collapses the Play tab to the
+bare essentials — the remote you can use with your eyes closed:
+
+```
+┌──────────────────────────┐         ┌──────────────────────────┐
+│ ● Living Room PC  ⌄  ⋮  │         │ ● Living Room PC  ⌃  ⋮  │
+├──────────────────────────┤         ├──────────────────────────┤
+│ Big Buck Bunny           │         │ Big Buck Bunny           │
+│ ███████░░░░░░░  12:34    │   ⌄     │ ███████░░░░░░░  12:34    │
+│                          │  ───▶   │                          │
+│ ⏮   ⟲10   (▶)   ⟳10   ⏭ │         │ ⏮   ⟲10   (▶)   ⟳10   ⏭ │
+│                          │         │                          │
+│ 🔊 ███████░░░░   80      │         │ 🔊 ███████░░░░   80      │
+├──────────────────────────┤         ├──────────────────────────┤
+│ [Queue]  [Subs]  [EQ]    │         │ (everything else hidden) │
+└──────────────────────────┘         └──────────────────────────┘
+   expanded (default)                    focus mode
+```
+
+Focus mode is remembered per device, and the chevron is the only way back.
+
+**2 · Settings → Play screen (the permanent version).** A checkbox list of every optional
+element, so a user who never touches EQ never sees it again:
+
+```
+Settings → Play screen
+  [✓] Volume row              [ ] Tune tab
+  [✓] Mode pill (Player/Web)  [ ] Streams segment
+  [✓] Secondary chips         [ ] Subtitles card
+  [✓] Queue card              [ ] Speed chips (in Tune → Equalizer)
+  [✓] Mini now-playing strip on Browse / Tune
+```
+
+Defaults: everything on **except** nothing — ship with everything visible, and let people
+subtract. (Hiding a *tab* hides it from the bottom bar entirely; the app never ships with
+fewer than two tabs.)
+
+**3 · Collapsible sections inside every tab.** Every card header (`Queue · 12 items ⌄`,
+`Presets ⌄`, `Sync ⌄`) is a tap-to-collapse row. Collapsed/expanded state is remembered
+per section. This is what keeps the Tune tab usable on a small phone.
+
+**4 · The list itself is space.** In the file browser the settings row
+(`Media only · Sort · Hidden folders`) collapses behind a small filter icon, because it is
+set once and never touched again.
+
+---
+
+## 4. Tab 1 — Play
+
+### 4.1 Player mode (the PC is playing)
+
+```
+┌──────────────────────────┐
+│ ● Living Room PC  ⌄  ⋮  │ ← header: dot · name · focus · overflow
+│              ◐ Player    │ ← MODE PILL (mirrors the PC, tap = switch)
+├──────────────────────────┤
+│  Big Buck Bunny          │
+│  ┌────────────────────┐  │
+│  │███████░░░░░░░░░░░░░│  │ ← seek: drag anywhere, amber hairline
+│  └────────────────────┘  │    while a seek is in flight
+│  12:34            45:12  │
+│                          │
+│  ⏮    ⟲10   (▶)   ⟳10  ⏭│ ← 72dp play, 48dp rest
+│                          │
+│  ⏹   ⤨  ⟳  ⛶   ☰        │ ← chips: Stop·Shuffle·Repeat·Fullscreen·Queue
+│                          │
+│  🔊 ███████░░░░   80     │
+├──────────────────────────┤
+│ ▾ Queue · 12 items       │ ← collapsible card · 5 rows max
+│   3  Episode 2.mkv       │ ← auto-scrolls so the current
+│ ▶ 4  Episode 3.mkv       │    row always stays in view
+└──────────────────────────┘
+```
+
+- **Mode pill** sits on the header line: `◐ Player` / `◐ Web`. It is a *label and a
+  switch* — it always shows the PC's real mode (the PC drives it), and tapping it asks the
+  PC to switch. When the PC switches on its own, the pill animates to the new label.
+- **Fullscreen `⛶`** is a chip, not a toggle on the Play button — you press it when you
+  sit down, not mid-scene.
+- **Queue is the playlist** (user, 2026-09-20): a collapsible card that shows **at most
+  5 rows**, scrolls inside, and **auto-scrolls so the now-playing row stays in view** the
+  moment the track changes. Tap a row to jump to it. It never pushes the transport
+  controls off-screen.
+- **Activity dot:** during any long PC job (folder read, subtitle search or download,
+  queue page), a small dot pulses once next to the connection dot — appearing only after
+  300 ms, so quick jobs never make it flicker. One dot, no text (user: "do what is best").
+
+### 4.2 Web mode (the PC is in its browser)
+
+The **same tab, transformed** — because the mode *is* the same remote, pointed at a
+different thing. And it has **two shapes**, because of the rule the user added
+(2026-09-20): *when the page itself is playing media, only the basics are offered* —
+play/pause, seek bar, volume, mute, fullscreen — because that is all most online
+players expose anyway.
+
+**Shape 1 — the page has a player** (`web.hasMedia`, mirrored from the PC):
+
+```
+┌──────────────────────────┐
+│ ● Living Room PC  ⌄  ⋮  │
+│               ◑ Web      │
+├──────────────────────────┤
+│  ◀  ▶  ⟳        ⛶   3   │ ← nav shrinks to one quiet row
+│  Dune — YouTube          │ ← title (tap = URL box + reload + tabs)
+│  ┌────────────────────┐  │
+│  │███████░░░░░░░░░░░░░│  │ ← the PAGE's position (1/s refresh)
+│  └────────────────────┘  │
+│  12:34            45:12  │
+│                          │
+│         ( ▶ )            │ ← big play/pause — the one button
+│                          │
+│  🔊 ███████░░░░    🔇    │ ← the page player's own volume + mute
+└──────────────────────────┘
+```
+
+**Shape 2 — no media on the page** (`found:false`): the nav body — back · forward ·
+reload · fullscreen · tab count, the live tab title/URL card, "Open a URL on the PC".
+No volume slider (there is nothing to volume) — that row simply isn't there.
+
+Shared rules:
+
+- The transport rows **disappear** in both shapes instead of sitting there dead. Dead
+  buttons are the fastest way to make an app feel broken.
+- **Web-media controls drive the page's own player** (JavaScript on the PC side — see
+  `remote.md` §17.11), not mpv. The volume slider is the site's own volume; it never
+  touches the Windows volume.
+- **When the page's player cannot be reached** (player inside a cross-origin iframe, or
+  DRM), the phone shows one plain line — *"This site's player can't be controlled from
+  outside."* — and drops back to the nav shape. Hidden beats broken, every time.
+- **Tabs count** is read-only in v1; a tab list, closing tabs, and the download shelf
+  are v2 (they need more PC-side plumbing — see `remote.md` §17.7).
+- **"Open a URL on the PC"** is the sleeper feature of this whole app: type or paste on
+  your phone, the PC browser goes there. Available in both shapes (tap the title in
+  Shape 1).
+- Switching back: tap the pill, or the PC user does it themselves — the APK follows either
+  way, with a 200 ms cross-fade between the bodies.
+
+---
+
+## 5. Tab 2 — Browse
+
+Segmented switch at the top: **Files | Streams**.
+
+### 5.1 Files — the PC's drives
+
+```
+┌──────────────────────────┐
+│ ● Living Room PC  ⌄  ⋮  │
+├──────────────────────────┤
+│   Files   │   Streams    │
+├──────────────────────────┤
+│ ◀  C: › Movies › Action  │ ← breadcrumb, tap any crumb
+│ ┌──────────────────────┐ │
+│ │ 📁 ..                │ │
+│ │ 📁 2024           > ＋│ │ ← folder: ▶ plays it, ＋ queues it
+│ │ 📁 Extras         > ＋│ │
+│ │ 🎬 Dune.Part.One. > ＋│ │ ← tap = PLAY NOW · ＋ = add to queue
+│ │ 🎬 Alien.mkv 2.2G > ＋│ │    (▶ only on media rows)
+│ │ 📄 notes.txt         │ │ ← non-media: visible if filter off,
+│ └──────────────────────┘ │    never tappable, no quick marks
+│  ⋯ 480 more       ⚙filters│ ← paging + filter/sort icon
+└──────────────────────────┘
+    long-press anywhere → select mode ☑
+```
+
+**Pinned places** replace the boring drive list as the landing view — this is the single
+biggest usability win in the whole browser:
+
+```
+│  Quick places            │
+│  [▶ Now playing] [⬇ Downloads] │
+│  [🎬 Videos] [🎵 Music] [🖥 Desktop] │
+│  Drives                  │
+│  [ C: ] [ D: ] [ E: ]    │ ← probing letters A–Z on the PC
+```
+
+`Now playing` opens the folder of the file currently playing on the PC, so the next
+episode is always two taps away (SALU already knows that folder).
+
+**Hard rules for this screen** (they matter more than the layout):
+
+| Rule | Why |
+|---|---|
+| **Read-only. Forever.** No delete, no rename, no move, no new folder. | A phone-thumb slip must never be able to destroy a library. |
+| **Media-only filter ON by default.** The filter icon reveals other files, but only media files are ever tappable-to-play. | Folders like `C:\Windows` become harmless. |
+| **System folders hidden by default** (`Windows`, `Program Files`, `ProgramData`, `$Recycle.Bin`, `System Volume Information`, `AppData`, `node_modules`…), behind one "Show hidden/system" toggle. | Prevents an accidental 40-second wait on a 90 000-entry folder. |
+| **Paged: 200 rows, then "load more".** | Never block the phone on a giant directory listing. |
+| **No thumbnails or posters — ever, in v1.** Names, sizes, icons. | Images over the socket is a whole feature; it would make this the slowest screen in the app. |
+| **The file never travels.** The PC opens the path locally. | The whole point: a 40 GB file plays in one byte of network traffic. |
+| **Multi-select, decided (user, 2026-09-20).** Every media/folder row carries two small quick marks — **`▶` play now** and **`＋` add to queue** — so one item never needs a long-press. **Long-press anywhere → select mode:** checkboxes appear, the header becomes `N selected` with a **Select all ⇄ Deselect** toggle, and a bottom bar appears with `▶ Play N` · `＋ Queue N` · `✕ done`. | Pick tonight's three episodes in two taps. The PC caps one batch at 500 paths (`remote.md` §17.4). |
+
+### 5.2 Streams — saved M3U URLs and a URL box
+
+```
+├──────────────────────────┤
+│   Files   │   Streams    │
+├──────────────────────────┤
+│ ┌──────────────────────┐ │
+│ │  ＋  Add a URL     │ │ ← accent; paste box + "Save on the PC too"
+│ └──────────────────────┘ │
+│ Saved on the PC          │
+│ ┌──────────────────────┐ │
+│ │ ● BDIX IPTV       ▶  │ │ ← ● = UrlHealth (green/red/grey)
+│ │   http://10.0.0.5…   │ │    tap = load + play on the PC
+│ ├──────────────────────┤ │
+│ │ ● Sports m3u8     ▶  │ │
+│ └──────────────────────┘ │
+│ (this is the PC's own list — currently capped at 7) │
+└──────────────────────────┘
+```
+
+- The list is **the PC's `UrlLibraryService`, mirrored** — never a second list on the
+  phone. Add from the phone and it appears on the PC; the health dot is the PC's verdict.
+- **Add a URL** takes anything: a direct stream, a YouTube link, an `.m3u` URL, or a plain
+  web link (which plays in Web mode instead — the PC already classifies this in
+  `OpenMediaService` / `ChannelSource`).
+- **Paste detection:** if the clipboard holds a URL, the field pre-fills and the button
+  reads `Play this link`. Typing on a phone keyboard is the tax this screen exists to
+  avoid.
+- Long-press a saved row → `Play now · Rename · Delete` (these edit the PC's library, which
+  is the user's own list — deletion is allowed *here*, unlike files).
+
+---
+
+## 6. Tab 3 — Tune
+
+Segmented: **Equalizer | Subtitles | Audio**. All three show *"Nothing is playing"* (with
+a Play shortcut) when the PC has no media. **In Web mode none of the three exist** — mpv
+is not in the picture — and the tab becomes a D-pad instead (§6.0).
+
+### 6.0 Web mode — the tab becomes a D-pad (added 2026-09-20)
+
+In Web mode there is no equalizer, no subtitle track and no audio track to choose.
+What there *is* is a web page the user cannot reach from the couch. So Tune turns
+into the thing a TV remote is for:
+
+```
+        ▲
+   ◀    [ OK ]    ▶
+        ▼
+  ▲▼ move the focus · ◀▶ back and forward · OK clicks
+  Focused:  Subscribe · 4.2M                    BUTTON
+```
+
+| Key | Does | Verb |
+|---|---|---|
+| `▲` `▼` | walk the page's focusable elements (link · button · input) | **`web_key {key:"ArrowUp"\|"ArrowDown"}`** — **new** |
+| `◀` `▶` | history back / forward — the escape hatch when focus-walking lands somewhere useless | `browser_nav {action:"back"\|"forward"}` (already in §17.4) |
+| `OK` | activate the focused element | **`web_key {key:"Enter"}`** — **new** |
+
+**The PC must draw a ring on whatever the phone has focused.** Without it the user
+is steering the browser blind and the feature is worse than useless. The ring is
+part of the design, not a nicety.
+
+**Where a text field has focus, the arrows belong to the caret** and `OK` submits
+rather than clicking. The phone shows what is focused and what kind of element it
+is, so the user can tell which of the two they are about to get.
+
+**Honest limits.** This walks the page's own tab order, so it is exactly as good as
+the site's markup. Well-built pages (link lists, forms, YouTube's own player
+controls) work. Single-page apps that draw everything into a `<canvas>` and manage
+focus themselves will not, and nothing injected from outside can fix that. The
+preview in `design/remote-preview/` shows the interaction with a mock focus order.
+
+**Implementation.** `remote.md` §17.4 defines `browser_nav` and the `web_media_*`
+family but nothing that moves focus, so `web_key` has to be added. It is injected
+JavaScript through the same `WebTab.executeScript` path `remote_web_media_bridge.dart`
+already uses (§17.11): read `document.activeElement`, walk to the next/previous
+focusable, `scrollIntoView`, and `click()` on Enter.
+
+### 6.1 Equalizer
+
+The PC's Tune panel has four lines — EQ, Picture, Aspect, Speed. **v1 sends the EQ line
+and the Speed line** to the phone (Speed is right below); Picture and Aspect stay PC-only
+(§11). The layout leaves room for the rest.
+
+```
+├──────────────────────────┤
+│ Equalizer │ Subs │ Audio │
+├──────────────────────────┤
+│ ┌──────────────────────┐ │
+│ │    (live curve)      │ │ ← port EqCurvePainter; redraws as you drag
+│ └──────────────────────┘ │
+│ ⤨ Flat · Rock · Jazz ›   │ ← horizontal preset chips, from the PC's own list
+│ ⭐ My                    │ ← the PC's "My" slot: apply or overwrite
+│ ──────────────────────── │
+│ 31  63  125 250 500 1k   │
+│ ▕▏  ▕▏  ▕▏  ▕▏  ▕▏  ▕▏   │ ← 10 vertical sliders, ±12 dB
+│ 2k  4k  8k  16k          │
+│                          │
+│ [ Reset ]   Auto EQ  (●) │
+│ Learned from what you keep │
+└──────────────────────────┘
+```
+
+- **Presets are the PC's list, in the PC's order**, and the *set* is chosen by the PC:
+  SALU already shows 13 audio presets for audio files and 4 video presets for video
+  (`TuneService.fileKind`). The APK just renders whatever the PC sends — including "My"
+  and the current selection — so the two can never disagree.
+- **Ten vertical sliders beat a draggable curve on a phone.** Fat thumbs, no fine aiming:
+  a slider can be grabbed anywhere along its height. The curve preview above gives the
+  shape at a glance, so the sliders only need to be precise, not pretty.
+- **Landscape, decided (assistant's call): yes — but only here.** Turn the phone sideways
+  on the Equalizer and it becomes a mixing desk: curve + presets in a left rail, all ten
+  sliders full-height on the right. Portrait already fits ten sliders (≈34 dp each); the
+  landscape layout is precision for its own sake, and no other screen unlocks it.
+- **Tuning while you drag:** the APK sends band changes continuously; the PC already
+  coalesces them (`TuneService.eqWriteGap = 120 ms`), so no extra throttle is needed on
+  either side. Send the whole 10-gain curve on release — never a diff.
+- **Reset** = `Flat`. **Auto EQ** is a switch mirroring the PC's setting; the *learning
+  memory* is intentionally not clearable from the phone (destructive + invisible).
+- **Speed lives here too** (user's answer #5 → assistant's call: in, and at the bottom of
+  this segment, keeping three tabs and three segments):
+
+```
+│ ──────────────────────── │
+│ Speed                    │
+│ [0.5×][0.75×][1×][1.25×] │
+│ [1.5×][2×][3×]           │ ← the PC's own stops, verbatim
+```
+
+  These are the PC's real stop keys (`x0_5 … x3`), rendered as chips with the current one
+  filled; tapping sends one `speed_set` and the PC's snapping does the rest. No fine slider
+  — the PC deliberately has none either (this line is "not evenly spaced" on purpose). The
+  chip row is included in the show/hide checklist like every other section.
+
+> **Honest advice:** the EQ only makes sense when you can *hear* the PC — couch distance,
+> not another room. So don't spend design effort making it buttery; make it precise and
+> reversible. That is why the preset chips and `Reset` sit right next to the sliders.
+
+### 6.2 Subtitles
+
+```
+├──────────────────────────┤
+│ Equalizer │ Subs │ Audio │
+├──────────────────────────┤
+│ Tracks               ⌄   │
+│ ┌──────────────────────┐ │
+│ │ ● English (embedded) │ │ ← ● selected (mpv's truth, mirrored)
+│ │ ○ off                │ │
+│ │ ○ Bengali — local .srt│ │
+│ └──────────────────────┘ │
+│ Sync                 ⌄   │
+│   [ −0.5s ]  0.0 s  [ +0.5s ] │ ← hold to repeat, 0.1 s steps
+│   [ Reset ]                    │
+│ ┌──────────────────────┐ │
+│ │ 🔍 Search online…  │ │ ← opens the search screen below
+│ └──────────────────────┘ │
+│ ┌──────────────────────┐ │
+│ │ 📁 Add a subtitle file│ │ ← reuses the Files browser (.srt/.ass/.sub)
+│ └──────────────────────┘ │
+│ Auto-download on play (●) │
+└──────────────────────────┘
+```
+
+**Search online** — this is the PC's own OpenSubtitles engine, driven from the couch:
+
+```
+┌──────────────────────────┐
+│ ← Subtitles              │
+│ [ Dune Part One       ]🔍│ ← pre-filled with the PC's current title
+│ Language [English ▾]     │ ← the PC's saved preference
+│ ┌──────────────────────┐ │
+│ │ English              │ │
+│ │ Dune.Part.One.2021.1080p │
+│ │ WEB · 584k downloads │ │ ← SubtitleResult.subLine, verbatim
+│ │           [ Download ]│ │
+│ ├──────────────────────┤ │
+│ │ Bengali              │ │
+│ │ …                    │ │
+│ └──────────────────────┘ │
+└──────────────────────────┘
+```
+
+- **The PC downloads and applies.** The phone only asks and watches. Tapping *Download*
+  is `saveAndLoad`: the file lands beside the media with SALU's own naming rule and is
+  loaded immediately — the subtitle is on screen before your thumb leaves the phone.
+- **Tapping a track row** = `selectSubTrack`; `off` = `SubtitleTrack.no()`.
+- **Sync** mirrors `PlayerService.subDelay` (0.1 s steps, hold to repeat, `Reset` = 0).
+  This is the feature people reach for most often during a bad subtitle file.
+- **Add a subtitle file** opens the Files browser in **subtitle mode** — same screen, same
+  rules, but listing only `.srt/.ass/.sub/.vtt` and returning a path instead of playing it.
+  One browser, two jobs; no second picker to build.
+- **Auto-download on play** is a switch over the PC's existing setting.
+
+### 6.3 Audio
+
+A humble list, included because multi-track files are common and this is one screen of work:
+
+```
+│ Audio tracks             │
+│ ┌──────────────────────┐ │
+│ │ ● English · 5.1 AC3  │ │ ← ● = currently selected
+│ │ ○ Hindi · 2.0 AAC    │ │ ← tap = switch (no confirmation)
+│ └──────────────────────┘ │
+```
+
+---
+
+## 7. What the phone cannot know — and must be told
+
+Half the "it looks broken" bugs in a remote app come from state that only the PC has.
+Every one of these must arrive in a snapshot and be rendered as **plain words**, never as
+a silent failure:
+
+| PC-only fact | What the APK shows |
+|---|---|
+| No media loaded | Tune tab: *"Nothing is playing"* + a Play shortcut |
+| PC is in Web mode | Play tab shows the Web body; Tune tab says *"Nothing to adjust in the browser"* |
+| OpenSubtitles **not signed in** | *"Sign in to OpenSubtitles on the PC to download subtitles."* |
+| **Download quota** reached | *"OpenSubtitles download limit reached. Try again tomorrow."* |
+| **No API key** configured | *"Add an OpenSubtitles key on the PC to search."* |
+| **File browsing** is switched off on the PC | Files tab: *"File browsing is turned off on the PC."* + a hint where to turn it on |
+| Search in progress | A determinate-looking progress row on the PC's behalf: *"Searching…"* (never a frozen button) |
+| Download in progress | *"Downloading…"* then *"Loaded"* — and on failure, the PC's own reason |
+| A path no longer exists | *"That file has moved or been deleted."* |
+| **Web page's player is out of reach** (cross-origin iframe / DRM) | Web body drops to the nav shape with one line: *"This site's player can't be controlled from outside."* |
+
+---
+
+## 8. Feedback and latency rules, per feature
+
+The golden rule from v1 still stands: **the phone reacts instantly, the PC agrees a moment
+later.** One table, so nobody has to guess:
+
+| Feature | Phone behaviour | Network behaviour |
+|---|---|---|
+| Transport (play/pause/next/stop) | Instant state change + haptic | Fire immediately, one command |
+| Seek / volume sliders | Optimistic, locked against incoming updates while dragging | Throttled ≤ 20/s while dragging, one command on release |
+| Fullscreen / mode / shuffle / repeat | Instant icon change | Fire immediately |
+| EQ bands | Curve + slider move locally | Continuous; the PC coalesces at 120 ms |
+| File list | Skeleton rows while loading; never a spinner over the whole screen | Paged, 200 rows, cached by path in RAM |
+| Subtitle search / download | Progress row with the PC's reason on failure | One request, one result message, then a state push |
+| Queue jump | Row highlights immediately, PC catches up | One command |
+| Playlist card | Auto-scrolls to the current row on every track change | Nothing — the snapshot's `queue.index/count` drives it; titles cached per index |
+| Web media controls (play/pause/seek/volume/mute/fullscreen) | Optimistic icon + slider state, like transport | Position read ~1/s (`web_media_get`); commands one at a time |
+
+---
+
+## 9. Marks to draw
+
+The APK ships **no image assets** — every icon is a `CustomPainter`, ported from the PC's
+`transport_marks.dart` / `salu_marks.dart` so both apps draw identical marks. New ones
+needed for this scope (add them on the PC side first, then port):
+
+`FolderMark` · `DriveMark` · `FileMediaMark` · `SubtitleMark (CC)` · `EqualizerMark` (exists) ·
+`GlobeMark (web)` · `LinkMark` · `FullscreenMark` · `ChevronMark` · `SearchMark` ·
+`ResetMark` · `QueueMark`
+
+Same recipe: `markStrokeFor(size)` for the stroke, `markInk(context)` for the colour,
+nothing filled, nothing boxed. At phone sizes the minimum stroke wants to be a touch
+heavier (1.8–2.0) than at the PC's 18 px.
+
+---
+
+## 10. Build order (updated)
+
+| Step | Deliverable | Notes |
+|---|---|---|
+| **A1** | Connect sheet → **Play** (transport, seek, volume) with the mode pill **and the playlist card** (5 rows, auto-scroll, tap-to-jump). | The proof. The card moved into A1 (user's answer #4) — `queue_get`/`queue_jump` are tiny reads the PC ships with R1. |
+| **A2** | **Browse → Streams** (+ Add URL) and **Browse → Files** (read-only browser, pinned places, quick `▶`/`＋` marks). | Highest happiness per line of code in the whole app. |
+| **A3** | **Tune → Subtitles** (tracks, sync, search, download) and **Tune → Audio**. | First feature that can genuinely save a ruined movie night. |
+| **A4** | **Tune → Equalizer** + presets + Speed chips; **select mode** (checkboxes, select-all, bottom action bar) in Files. | EQ last, on purpose: it is the least-used tool in the set. |
+| **A5** | Web mode body in both shapes (nav + web media + open-URL), Focus mode, Settings → Play screen, collapse memory, activity dot. | The polish pass that makes it feel like a finished product. |
+
+Each step is usable on its own, and the app is never in a broken state between steps.
+
+---
+
+## 11. Deliberately not added (and the reason, so it is not re-litigated)
+
+| Not in v1 | Why |
+|---|---|
+| Thumbnails / posters in the file browser | Sending images over the socket turns the fastest screen into the slowest. Names + sizes are enough to pick an episode. |
+| Picture / Aspect lines of the PC's Tune panel | They change the *picture*, which you cannot judge from a phone. **Speed is no longer in this table** — it joined Tune → Equalizer as chips (§6.1, user's answer #5). |
+| Subtitle **style** overrides (font, size, colour, position) | Every one of them is a "look at the screen and adjust" job. It belongs on the PC. |
+| Clearing the EQ learning memory | Destructive, invisible, and irreversible from the phone. |
+| Queue editing (remove / reorder) | The PC does it better with a mouse. Jumping is what the phone is for. |
+| Tabs list, tab close, downloads shelf in Web mode | Needs a real PC-side mirror of the browser's tab strip (see `remote.md` §17.7). v2. |
+| Fetching a subtitle from a **URL** | SALU deliberately never loads remote subtitle streams (`cc.md` D6) — a new rule would be needed, so it is a v2 decision, not an accident. |
+| A foreground service to control with the phone locked | v2; v1 keeps the screen awake while the app is open. |
+
+---
+
+## 12. The advice I would give you before you build any of this
+
+1. **The app just doubled in size — protect the three tabs.** The moment a fourth tab
+   appears, the everyday remote has been buried. Files, Streams, EQ, Subs and Audio all
+   fit under three intent-based tabs; keep it that way and use the collapse rules for
+   everything else.
+2. **Build Browse → Files before the Equalizer.** People use "play the next episode" every
+   single evening; they touch the EQ twice a year. Build in order of how often a thumb
+   will touch it.
+3. **Privacy posture changed — decide it consciously.** Until now the phone learned
+   nothing about your PC. A file browser sends folder names and file names, on demand. It
+   is still read-only, still authenticated, still LAN-only, and there is a PC-side switch
+   to turn it off (`remote.md` §17.6) — but it *is* a change, so it gets its own toggle
+   rather than hiding inside the remote switch.
+4. **Never let the phone become a file manager.** No rename, no delete, no move, no
+   upload. The day someone asks for those, the answer is "use the PC".
+5. **Test the ugly states first:** PC asleep, wrong folder, subtitle quota hit, file moved.
+   Those are the states that decide whether the app feels trustworthy — far more than how
+   pretty the EQ sliders are.
+6. **One keyboard rule:** anywhere the phone can type (URL, subtitle search, folder
+   search), the field opens pre-filled with the PC's best guess and the clipboard is
+   checked first. Typing on a phone next to a PC is the thing you are trying to abolish.
+7. **Keep the visual language identical to SALU.** Same palette, same thin marks, same
+   quiet surfaces. The APK should look like SALU's own remote, not a third-party tool that
+   happens to connect to it.
+
+---
+
+## 13. Open questions — all answered (2026-09-20)
+
+No open questions remain. The six answers, kept as a record so they are never re-litigated:
+
+| # | Question | Your answer | What it became |
+|---|---|---|---|
+| 1 | File browsing default | "As you said, I agree" | **ON**, with the switch visible in both the APK's Files tab and the PC's Remote panel (`remote.md` §17.6). |
+| 2 | Multi-select | Checkbox multi-select with select-all/deselect; per-item play/add — "+ and ▶ buttons" | **§5.1**: quick `▶`/`＋` marks on every row, long-press → checkbox mode, `N selected` header with **Select all ⇄ Deselect**, bottom bar `▶ Play N · ＋ Queue N · ✕`. |
+| 3 | EQ in landscape | "What is best you select" | **Assistant: yes, EQ-only landscape** — mixing-desk layout (§6.1). |
+| 4 | Queue card vs screen | "Does it mean playlist? If yes: collapsible, autoscroll, max 5" | Yes — it is the playlist. **Collapsible card, auto-scrolls to the now-playing row, 5 rows visible, tap a row to jump** (§4.1). Moved into A1; PC ships `queue_get`/`queue_jump` with R1. |
+| 5 | Speed chips | "What is best you feel" | **Assistant: in** — chips at the bottom of Tune → Equalizer, the PC's own stops 0.5×–3× (§6.1). |
+| 6 | Activity indicator | "Do what is best" | **Assistant: yes** — one quiet dot by the connection dot, 300 ms delay, no text (§4.1). |
+| + | *(new rule you added)* | Web page playing media → **only basic controls**: play/pause, seek bar, volume, mute, fullscreen | **§4.2**, two shapes. PC side: `remote.md` §17.11 (JavaScript on the page's own player) — with the honest limit: cross-origin/DRM players hide the controls instead of failing. |

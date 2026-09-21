@@ -1,6 +1,8 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+// `RepeatMode` below is the protocol enum from core/models.dart,
+// not Flutter's animation one.
+import 'package:flutter/material.dart' hide RepeatMode;
 
 import 'core/client.dart';
 import 'core/error_copy.dart';
@@ -156,7 +158,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         builder: (BuildContext context, LinkState state, _) =>
             ValueListenableBuilder<SaluSnapshot?>(
           valueListenable: _client.snapshot,
-          builder: (BuildContext context, SaluSnapshot? snapshot, __) {
+          builder: (BuildContext context, SaluSnapshot? snapshot, _) {
             return ListView(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
               children: <Widget>[

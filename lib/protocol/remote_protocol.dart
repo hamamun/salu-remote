@@ -204,7 +204,7 @@ abstract final class RemoteProtocol {
         'proto': protocolVersion,
         'id': id,
         'ok': true,
-        if (result != null) ...result,
+        ...?result,
       };
 
   static Map<String, Object?> error(

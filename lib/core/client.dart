@@ -695,7 +695,7 @@ class SaluClient {
   Future<RemoteReply> libraryAdd(String url, {String? name, bool save = true}) =>
       send(
         'library_add',
-        args: <String, Object?>{'url': url, if (name != null) 'name': name, 'save': save},
+        args: <String, Object?>{'url': url, ?'name': name, 'save': save},
       );
   Future<RemoteReply> libraryRemove(String url) =>
       send('library_remove', args: <String, Object?>{'url': url});
@@ -767,8 +767,8 @@ class SaluClient {
   Future<RemoteReply> webMediaSeek({int? to, int? delta}) => send(
         'web_media_seek',
         args: <String, Object?>{
-          if (to != null) 'to': to,
-          if (delta != null) 'delta': delta,
+          ?'to': to,
+          ?'delta': delta,
         },
       );
   Future<RemoteReply> webMediaVolume(int percent) =>

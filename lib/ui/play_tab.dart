@@ -75,38 +75,51 @@ class _PlayTabState extends State<PlayTab> {
   }
 
   Widget _waiting() {
-    final LinkState state = _client.link.value;
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: <Widget>[
-        SaluCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Text(
-                state == LinkState.connecting
-                    ? 'Reaching your PC…'
-                    : state == LinkState.unreachable
-                        ? 'Trying to reach your PC again…'
-                        : 'Not connected yet.',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'Make sure SALU is running with Remote switched on, and that this '
-                'phone is on the same Wi-Fi as the PC.',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              const SizedBox(height: 14),
-              FilledButton.icon(
-                icon: const Icon(Icons.qr_code_2),
-                label: const Text('Connect'),
-                onPressed: () => ConnectSheet.show(context),
-              ),
-            ],
-          ),
-        ),
-      ],
+    // Both notifiers feed this card: the state picks the title, and the
+    // client's own diagnosis (firewall, wrong port, code rejected…) replaces
+    // the generic hint the moment there is one.
+    return ValueListenableBuilder<LinkState>(
+      valueListenable: _client.link,
+      builder: (BuildContext context, LinkState state, _) {
+        return ValueListenableBuilder<String?>(
+          valueListenable: _client.problemMessage,
+          builder: (BuildContext context, String? problem, _) {
+            return ListView(
+              padding: const EdgeInsets.all(16),
+              children: <Widget>[
+                SaluCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        state == LinkState.connecting
+                            ? 'Reaching your PC…'
+                            : state == LinkState.unreachable
+                                ? 'Trying to reach your PC again…'
+                                : 'Not connected yet.',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        problem ??
+                            'Make sure SALU is running with Remote switched on, and that this '
+                                'phone is on the same Wi-Fi as the PC.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 14),
+                      FilledButton.icon(
+                        icon: const Icon(Icons.qr_code_2),
+                        label: const Text('Connect'),
+                        onPressed: () => ConnectSheet.show(context),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 

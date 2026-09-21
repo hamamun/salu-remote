@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../core/client.dart';
 import '../core/deep_link.dart';
+import '../core/pc_address.dart';
 import '../core/prefs.dart';
 import 'qr_scan.dart';
 import 'theme.dart';
@@ -61,7 +62,13 @@ class _ConnectSheetState extends State<ConnectSheet> {
     _code = TextEditingController(text: widget.prefill?.code ?? '');
     _wasOffline = !_client.isOnline;
     _client.link.addListener(_onLink);
-    if (widget.prefill != null) unawaited(_connect());
+    if (widget.prefill != null) {
+      // After the first frame, so the sheet (and its ScaffoldMessenger) is
+      // in the tree before anything wants to talk to the user.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_connect());
+      });
+    }
   }
 
   @override
@@ -73,32 +80,49 @@ class _ConnectSheetState extends State<ConnectSheet> {
   }
 
   void _onLink() {
-    if (_popped) return;
-    if (_wasOffline && _client.link.value == LinkState.online && mounted) {
+    if (_popped || !mounted) return;
+    if (_wasOffline && _client.link.value == LinkState.online) {
       _popped = true;
       Navigator.of(context).pop();
+      return;
     }
+    // The dot, the button label and the diagnostics block all read the link
+    // state straight from the client, so a change must repaint the sheet.
+    setState(() {});
   }
 
   Future<void> _connect() async {
     final String raw = _address.text.trim();
     if (raw.isEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Type the PC address first.')));
+      _say('Type the PC address first — it is shown in the PC\'s Remote panel.');
       return;
     }
-    String host = raw;
-    int port = 7258;
-    final int colon = raw.lastIndexOf(':');
-    if (colon > 0) {
-      host = raw.substring(0, colon).trim();
-      port = int.tryParse(raw.substring(colon + 1).trim()) ?? 7258;
+    final PcAddress? target = PcAddress.parse(raw);
+    if (target == null) {
+      _say('That does not look like an address. Try the form 192.168.0.12:7258.');
+      return;
     }
+    final String code = _code.text.trim();
+    if (code.isEmpty && RemotePrefs.instance.token == null) {
+      // Without a token the PC can only accept a pairing code; sending an
+      // empty `auth` would just come back `bad_code`. Say so up front.
+      _say('Type the pairing code from the PC\'s Remote panel (first time only).');
+      return;
+    }
+    // Show the user exactly what will be dialled.
+    _address.text = target.toString();
     await _client.connect(
-      host: host,
-      port: port,
-      code: _code.text.trim().isEmpty ? null : _code.text.trim(),
+      host: target.host,
+      port: target.port,
+      code: code.isEmpty ? null : code,
     );
+  }
+
+  void _say(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _scanQr() async {
@@ -165,9 +189,12 @@ class _ConnectSheetState extends State<ConnectSheet> {
             TextField(
               controller: _code,
               autocorrect: false,
+              enableSuggestions: false,
               textCapitalization: TextCapitalization.characters,
-              decoration: const InputDecoration(
-                labelText: 'Pairing code (only the first time)',
+              decoration: InputDecoration(
+                labelText: RemotePrefs.instance.token == null
+                    ? 'Pairing code (only the first time)'
+                    : 'Pairing code (only if the PC forgot this phone)',
                 hintText: '7K4M-QP2X',
               ),
             ),

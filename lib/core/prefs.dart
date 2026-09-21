@@ -74,6 +74,13 @@ class RemotePrefs {
     }
   }
 
+  /// Drop only the token, keeping the address: the PC forgot this phone
+  /// (`bad_token`), or the user typed a fresh pairing code for the same PC.
+  /// Either way the next `auth` must carry the code, not a dead token.
+  Future<void> forgetToken() async {
+    await _store?.remove(_kToken);
+  }
+
   /// Forget the PC. The token dies here and the PC still believes it is paired —
   /// but its next `auth` with that token fails `bad_token` and it re-pairs.
   Future<void> forgetPc() async {

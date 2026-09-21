@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../protocol/remote_protocol.dart';
+import 'connect_failure.dart';
 import 'models.dart';
 import 'prefs.dart';
 import 'reply.dart';
@@ -98,15 +99,41 @@ class SaluClient {
   StreamSubscription<Object?>? _events;
   Timer? _reconnectTimer;
   Timer? _pingTimer;
+  Timer? _handshakeTimer;
   DateTime? _pingSentAt;
   bool _authenticated = false;
+
+  /// Whether *this* socket has received `hello` yet — [server] keeps the last
+  /// PC's details across reconnects for the header, so it cannot answer that.
+  bool _sawHello = false;
   bool _wanted = false;
   String? _host;
   int? _port;
   String? _pairingCode;
   int _attempt = 0;
-  int _nextId = 1;
+
+  /// Bumped by every `_open()` and `_teardown()`. A socket that finishes
+  /// opening after the user has moved on (Connect pressed twice, the address
+  /// changed, Disconnect tapped) belongs to an older generation and is closed
+  /// instead of adopted — otherwise two live sockets would fight over
+  /// [_socket] and the loser's `onDone` would clobber the winner's state.
+  int _generation = 0;
+
+  /// `auth` uses id 1 (`remote.md` §6.1); commands start above it so an
+  /// auth error can never be mistaken for a command reply.
+  int _nextId = 2;
   final Map<int, Completer<RemoteReply>> _pending = <int, Completer<RemoteReply>>{};
+
+  /// How long the TCP + WebSocket upgrade may take. On a LAN a live PC
+  /// answers in milliseconds; a *silently dropped* SYN (Windows Firewall, AP
+  /// isolation, wrong subnet) is the one case that runs the full clock.
+  static const Duration _connectTimeout = Duration(seconds: 8);
+
+  /// How long after the upgrade the PC has to say `hello` and answer `auth`.
+  /// The PC sends `hello` in the same breath as the upgrade and closes an
+  /// unauthenticated socket after 5 s, so anything slower than this is not a
+  /// SALU we can talk to — a half-open socket, or another program on the port.
+  static const Duration _handshakeTimeout = Duration(seconds: 6);
 
   bool get isOnline => link.value == LinkState.online;
   bool get hasControl =>
@@ -123,6 +150,7 @@ class SaluClient {
     'auth_timeout',
     'auth_required',
     'auth_failed',
+    'not_paired',
   };
 
   // ── lifecycle ─────────────────────────────────────────────────────────────
@@ -137,6 +165,12 @@ class SaluClient {
   }
 
   /// Opens the socket. [code] is only needed for the very first pairing.
+  ///
+  /// A code typed (or scanned) always goes on the wire, even when this phone
+  /// still holds a token: the person in front of the PC's panel knows better
+  /// than a stored credential. The token itself is left alone until the PC
+  /// says it is dead (`bad_token`) or replaces it (`auth_ok`), so a mistyped
+  /// code never costs a pairing that was still good.
   Future<void> connect({
     required String host,
     required int port,
@@ -145,21 +179,38 @@ class SaluClient {
     await _teardown();
     _host = host.trim();
     _port = port;
-    _pairingCode = code == null ? null : _normalizeCode(code);
+    final String? normalized = code == null ? null : _normalizeCode(code);
+    _pairingCode = normalized == null || normalized.isEmpty ? null : normalized;
     _wanted = true;
     _attempt = 0;
     _clearProblem();
     address.value = '$_host:$_port';
+    final RemotePrefs prefs = RemotePrefs.instance;
+    await prefs.rememberAddress(_host!, port);
+    if (_pairingCode == null && prefs.token == null) {
+      // Nothing to authenticate with. Dialling anyway would only earn a
+      // `bad_code` from the PC — a confusing answer to a code nobody typed.
+      problemCode.value = 'not_paired';
+      problemMessage.value = 'This phone is not paired yet. Scan the QR in the '
+          "PC's Remote panel, or type the pairing code shown under it.";
+      link.value = LinkState.needsPairing;
+      _wanted = false;
+      return;
+    }
     link.value = LinkState.connecting;
-    await RemotePrefs.instance.rememberAddress(_host!, port);
     await _open();
   }
 
-  /// Reconnect to whatever `prefs` remembers — the Connect sheet's "Try again".
+  /// Reconnect to whatever `prefs` remembers — the header's refresh button.
+  ///
+  /// A pairing code that is still in hand (the token never arrived, so the
+  /// code was not consumed) is reused; once `auth_ok` has replaced it with a
+  /// token the code is gone and the token is what goes on the wire.
   Future<void> reconnectRemembered() async {
     final RemotePrefs prefs = RemotePrefs.instance;
+    final String? code = prefs.token == null ? _pairingCode : null;
     if (_host != null && _port != null) {
-      await connect(host: _host!, port: _port!);
+      await connect(host: _host!, port: _port!, code: code);
       return;
     }
     if (prefs.isPaired) {
@@ -199,8 +250,11 @@ class SaluClient {
   }
 
   Future<void> _teardown() async {
+    _generation++;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
+    _handshakeTimer?.cancel();
+    _handshakeTimer = null;
     _stopPing();
     _authenticated = false;
     final StreamSubscription<Object?>? events = _events;
@@ -220,45 +274,87 @@ class SaluClient {
 
   Future<void> _open() async {
     if (!_wanted || _host == null || _port == null) return;
+    if (_socket != null) return; // One socket at a time, always.
     if (link.value != LinkState.online) link.value = LinkState.connecting;
+    final String host = _host!;
+    final int port = _port!;
+    final int generation = ++_generation;
+    debugPrint('[SALU remote] connecting to ws://$host:$port/ (attempt ${_attempt + 1})');
+    final Future<WebSocket> opening = WebSocket.connect('ws://$host:$port/');
+    final WebSocket socket;
     try {
-      final WebSocket socket = await WebSocket.connect('ws://$_host:$_port/')
-          .timeout(const Duration(seconds: 8));
-      // Reaps a socket whose peer vanished (PC slept) instead of believing it
-      // is alive until the next write fails (`remote.md` §11).
-      socket.pingInterval = const Duration(seconds: 20);
-      _socket = socket;
-      _events = socket.listen(
-        _onFrame,
-        onDone: _onClosed,
-        onError: (Object error, StackTrace stack) => _onClosed(),
-        cancelOnError: true,
-      );
-      _attempt = 0;
-      _sendAuth();
-      _startPing();
-    } on TimeoutException {
-      _failLink(
-        'unreachable',
-        'The PC did not answer. Is SALU running, and Remote switched on?',
-      );
-    } on HandshakeException {
-      // The PC refuses anything that is not a native client on a private
-      // address (`remote.md` §7.1) — a web page would land here.
-      _failLink('refused', 'The PC refused this connection.');
-    } on SocketException {
-      _failLink(
-        'unreachable',
-        "Can't reach $_host. Check that the phone is on the same Wi-Fi as the PC.",
-      );
+      socket = await opening.timeout(_connectTimeout);
     } catch (error) {
-      _failLink('unreachable', 'Connection failed: $error');
+      if (error is TimeoutException) {
+        // `timeout` gives up waiting but the connect itself carries on. If it
+        // lands later, close it — an orphan that never sends `auth` would sit
+        // in the PC's connection budget until its 5 s timer reaps it.
+        unawaited(opening.then<void>(
+          (WebSocket orphan) => orphan.close().catchError((Object _) {}),
+          onError: (Object _) {},
+        ));
+      }
+      if (generation != _generation || !_wanted) return; // Nobody wants it.
+      final ConnectFailure failure = ConnectFailure.classify(error, host: host, port: port);
+      debugPrint('[SALU remote] connect failed: ${failure.code} — $error');
+      _failLink(failure.code, failure.message);
+      return;
     }
+    if (generation != _generation || !_wanted) {
+      // The user disconnected, or pointed the app elsewhere, while this
+      // socket was still opening. It is nobody's socket now.
+      unawaited(socket.close().catchError((Object _) {}));
+      return;
+    }
+    // Reaps a socket whose peer vanished (PC slept) instead of believing it
+    // is alive until the next write fails (`remote.md` §11).
+    socket.pingInterval = const Duration(seconds: 20);
+    _socket = socket;
+    _sawHello = false;
+    _events = socket.listen(
+      _onFrame,
+      onDone: _onClosed,
+      onError: (Object error, StackTrace stack) => _onClosed(),
+      cancelOnError: true,
+    );
+    _attempt = 0;
+    debugPrint('[SALU remote] socket open, sending auth');
+    _sendAuth();
+    _startHandshakeClock();
+    _startPing();
+  }
+
+  /// The PC sends `hello` the instant the upgrade completes and `auth_ok`
+  /// within a moment of our `auth`. If neither shows up, the socket is not
+  /// talking to a SALU we understand — tear it down and say so, instead of
+  /// sitting on "Connecting…" until the PC's own 5 s auth timer closes us
+  /// (or forever, when it is not SALU at all).
+  void _startHandshakeClock() {
+    _handshakeTimer?.cancel();
+    _handshakeTimer = Timer(_handshakeTimeout, () {
+      _handshakeTimer = null;
+      if (_authenticated || _socket == null) return;
+      final bool sawHello = _sawHello;
+      debugPrint('[SALU remote] handshake timed out (hello seen: $sawHello)');
+      unawaited(_teardown().then((_) {
+        if (!_wanted) return;
+        _failLink(
+          'unreachable',
+          sawHello
+              ? 'SALU answered but never accepted the pairing. Try again; if '
+                  'it repeats, restart Remote in SALU\'s Settings.'
+              : 'Connected to $_host:$_port, but it did not speak SALU Remote. '
+                  'Check the port in the PC\'s Remote panel.',
+        );
+      }));
+    });
   }
 
   void _sendAuth() {
     final RemotePrefs prefs = RemotePrefs.instance;
-    final Map<String, Object?> auth = _pairingCode != null && prefs.token == null
+    final bool byCode = _pairingCode != null;
+    debugPrint('[SALU remote] auth by ${byCode ? 'pairing code' : 'token'}');
+    final Map<String, Object?> auth = byCode
         ? RemoteProtocol.authByPairingCode(
             id: 1,
             pair: _pairingCode!,
@@ -329,6 +425,8 @@ class SaluClient {
   void _onHello(Map<String, Object?> message) {
     final ServerInfo info = ServerInfo.from(message);
     server.value = info;
+    _sawHello = true;
+    debugPrint('[SALU remote] hello from ${info.name} (PC ${info.version}, proto ${info.proto})');
     if (info.proto != protocolVersion) {
       // D7: a mismatched protocol is a clear error, never a half-working app.
       problemCode.value = RemoteErrorCode.versionMismatch;
@@ -348,6 +446,8 @@ class SaluClient {
 
   Future<void> _onAuthOk(Map<String, Object?> message) async {
     _authenticated = true;
+    _handshakeTimer?.cancel();
+    _handshakeTimer = null;
     final Object? token = message['token'];
     if (token is String && token.isNotEmpty) {
       // Always returned, even for a token the PC already knew — idempotent, so
@@ -408,21 +508,34 @@ class SaluClient {
     // No one was waiting: this is an authentication failure, i.e. about the
     // link itself rather than about one command.
     if (code != null && _noRetryCodes.contains(code)) {
+      debugPrint('[SALU remote] auth failed: $code — $text');
       problemCode.value = code;
       problemMessage.value = text;
       link.value = LinkState.needsPairing;
       _wanted = false;
+      if (code == RemoteErrorCode.badToken) {
+        // The PC forgot this phone. Keeping the token would make every later
+        // attempt fail the same way; dropping it lets the next code pair.
+        unawaited(RemotePrefs.instance.forgetToken());
+      }
       unawaited(_teardown());
     }
   }
 
   void _onClosed() {
     final int? closeCode = _socket?.closeCode;
+    final String? closeReason = _socket?.closeReason;
+    final bool wasAuthenticated = _authenticated;
     _socket = null;
     _events = null;
     _authenticated = false;
+    _handshakeTimer?.cancel();
+    _handshakeTimer = null;
     _stopPing();
     _failPending(RemoteReply.offline());
+    debugPrint('[SALU remote] socket closed (code $closeCode'
+        '${closeReason == null || closeReason.isEmpty ? '' : ', "$closeReason"'}'
+        ', authenticated: $wasAuthenticated)');
     if (!_wanted) {
       if (link.value != LinkState.needsPairing) link.value = LinkState.off;
       return;
@@ -455,6 +568,16 @@ class SaluClient {
         }
         break;
       default:
+        if (!wasAuthenticated && problemCode.value == null) {
+          // Dropped mid-handshake with no code at all. The PC always says
+          // why when *it* closes (an `error` frame, or a 4xxx code), so this
+          // is the network or the PC process going away — retryable, but
+          // worth a line so the sheet is not blank while we retry.
+          problemCode.value = 'unreachable';
+          problemMessage.value =
+              'The connection dropped before the PC finished the handshake. '
+              'Trying again… (if this repeats, restart Remote in SALU\'s Settings).';
+        }
         break;
     }
     if (problemCode.value != null && _noRetryCodes.contains(problemCode.value)) {

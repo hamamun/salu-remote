@@ -6,17 +6,29 @@ for the media itself.
 
 ## Current milestone
 
-The current build contains the first working remote loop:
+The current build contains the full v2 scope:
 
-- pair by the SALU PC address and pairing code;
-- reconnect to a remembered PC;
-- play/pause, stop, previous/next, seek, volume and mute;
-- shuffle, repeat and player/web mode commands;
-- live playback state and connection feedback from the PC.
+- **Pairing two ways** — in-app QR scan (camera, via `mobile_scanner`) and the
+  `salu://pair` deep link, both landing in the connect sheet with the PC pre-filled;
+- **the three-tab interface** (Play · Browse · Tune):
+  - **Play** — transport, seek, volume, shuffle/repeat, the now-playing/queue
+    card (tap a row to jump), the mode pill, secondary chips, and the web body
+    (url/iframe switch, back/forward/reload) with its own web volume;
+  - **Browse** — Files (PC's own file tree, read-only) and Streams (saved
+    streams with the PC's health verdict), greyed out while the PC is in web
+    mode;
+  - **Tune** — Equalizer (the PC's presets and curve, drag a band, speed
+    chips), Subtitles (tracks, delay, search, file picker, auto-download) and
+    Audio tracks; the tab becomes a **D-pad** in web mode when the PC
+    advertises `web_key`;
+- **focus mode** — Play with only the essential controls, one gesture away;
+- the **connect sheet** (QR / manual / paste, diagnostics, remember me),
+  **settings** (phone name + the show/hide checklist), reconnect to a
+  remembered PC, live playback state and connection feedback from the PC.
 
 The Android permissions, API level, screen-awake channel and persistence dependency are
-already applied in this checkout. The next product step is the QR pairing flow and the
-three-tab interface (Play, Browse and Tune), after the first phone-to-PC test succeeds.
+already applied in this checkout. `flutter pub get` before the first run — the QR scanner
+added one dependency (`mobile_scanner`).
 
 ## Run from Android Studio
 

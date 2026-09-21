@@ -38,6 +38,10 @@ dependencies:
   # Persists the paired PC and the phone's UI preferences.
   shared_preferences: ^2.2.3
 
+  # Camera QR scanning for pairing (remote.md D2); the maintained successor
+  # of qr_code_scanner.
+  mobile_scanner: ^7.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

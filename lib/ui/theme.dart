@@ -41,14 +41,17 @@ class SaluCard extends StatelessWidget {
     super.key,
     required this.child,
     this.padding = const EdgeInsets.all(16),
+    this.margin,
   });
 
   final Widget child;
   final EdgeInsets padding;
+  final EdgeInsets? margin;
 
   @override
   Widget build(BuildContext context) {
     return Container(
+      margin: margin,
       padding: padding,
       decoration: BoxDecoration(
         color: AppColors.surface,

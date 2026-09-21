@@ -32,9 +32,28 @@ class QrScanScreen extends StatefulWidget {
 
 class _QrScanScreenState extends State<QrScanScreen> {
   late final MobileScannerController _controller;
+
+  /// Our own subscription to the barcode stream.
+  ///
+  /// This is deliberately **not** `MobileScanner.onDetect`. That widget
+  /// subscribes to the stream exactly once, in its `initState`, with whatever
+  /// callback it was first built with — and it never re-subscribes when the
+  /// callback changes. The previous version passed `null` until the camera
+  /// was up, so the widget captured `null`, no subscription was ever made,
+  /// and the scanner looked at QR codes forever without reacting. Listening
+  /// on the controller directly has no such race.
+  StreamSubscription<BarcodeCapture>? _barcodes;
+
   bool _handled = false;
   bool _cameraReady = false;
   bool _cameraDenied = false;
+  String? _cameraProblem;
+
+  /// The last thing the camera read that was *not* a SALU link, so a wrong
+  /// QR (a Wi-Fi card, a web address) gets one honest line instead of the
+  /// silence that looks like a broken scanner.
+  String? _wrongCode;
+  Timer? _wrongCodeTimer;
 
   @override
   void initState() {
@@ -42,7 +61,19 @@ class _QrScanScreenState extends State<QrScanScreen> {
     _controller = MobileScannerController(
       facing: CameraFacing.back,
       detectionSpeed: DetectionSpeed.normal,
+      // The PC's QR is the only thing we want; skipping the other twelve
+      // symbologies makes ML Kit noticeably quicker to lock on.
+      formats: const <BarcodeFormat>[BarcodeFormat.qrCode],
       autoStart: false,
+    );
+    _barcodes = _controller.barcodes.listen(
+      _onDetect,
+      onError: (Object error, StackTrace stack) {
+        // A frame ML Kit could not decode. Not fatal; the next frame is
+        // already on its way.
+        debugPrint('[SALU remote] QR frame error: $error');
+      },
+      cancelOnError: false,
     );
     WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_startCamera()));
   }
@@ -51,37 +82,84 @@ class _QrScanScreenState extends State<QrScanScreen> {
     try {
       await _controller.start();
       if (!mounted) return;
+      // `start()` reports permission and hardware problems through the
+      // controller's value rather than by throwing.
+      final MobileScannerException? error = _controller.value.error;
+      if (error != null) {
+        debugPrint('[SALU remote] camera failed: ${error.errorCode} '
+            '${error.errorDetails?.message ?? ''}');
+        setState(() {
+          _cameraReady = false;
+          _cameraDenied = true;
+          _cameraProblem = _describe(error);
+        });
+        return;
+      }
       setState(() {
         _cameraReady = true;
         _cameraDenied = false;
+        _cameraProblem = null;
       });
-    } catch (_) {
+    } on MobileScannerException catch (error) {
       if (!mounted) return;
+      debugPrint('[SALU remote] camera failed: ${error.errorCode}');
       setState(() {
         _cameraReady = false;
         _cameraDenied = true;
+        _cameraProblem = _describe(error);
+      });
+    } catch (error) {
+      if (!mounted) return;
+      debugPrint('[SALU remote] camera failed: $error');
+      setState(() {
+        _cameraReady = false;
+        _cameraDenied = true;
+        _cameraProblem = null;
       });
     }
   }
 
+  static String? _describe(MobileScannerException error) {
+    switch (error.errorCode) {
+      case MobileScannerErrorCode.permissionDenied:
+        return 'Camera access was denied. Allow it for SALU Remote in the '
+            'phone\'s Settings → Apps, then reopen this screen.';
+      case MobileScannerErrorCode.unsupported:
+        return 'This phone has no camera the scanner can use.';
+      default:
+        return null;
+    }
+  }
+
   void _onDetect(BarcodeCapture capture) {
-    if (_handled) return;
+    if (_handled || !mounted) return;
+    String? unrecognised;
     for (final Barcode barcode in capture.barcodes) {
-      final PairLink? link = DeepLink.parse(barcode.rawValue);
+      final String? raw = barcode.rawValue ?? barcode.displayValue;
+      final PairLink? link = DeepLink.parse(raw);
       if (link != null) {
         _handled = true;
+        debugPrint('[SALU remote] QR read: ${link.address}');
         unawaited(_controller.stop());
         HapticFeedback.mediumImpact();
-        if (mounted) {
-          Navigator.of(context).pop(link);
-        }
+        Navigator.of(context).pop(link);
         return;
       }
+      if (raw != null && raw.isNotEmpty) unrecognised = raw;
+    }
+    if (unrecognised != null && unrecognised != _wrongCode) {
+      setState(() => _wrongCode = unrecognised);
+      _wrongCodeTimer?.cancel();
+      _wrongCodeTimer = Timer(const Duration(seconds: 3), () {
+        if (mounted) setState(() => _wrongCode = null);
+      });
     }
   }
 
   @override
   void dispose() {
+    _wrongCodeTimer?.cancel();
+    unawaited(_barcodes?.cancel());
     unawaited(_controller.dispose());
     super.dispose();
   }
@@ -98,6 +176,23 @@ class _QrScanScreenState extends State<QrScanScreen> {
           icon: const Icon(Icons.close),
           onPressed: () => Navigator.of(context).pop(),
         ),
+        actions: <Widget>[
+          if (_cameraReady)
+            ValueListenableBuilder<MobileScannerState>(
+              valueListenable: _controller,
+              builder: (BuildContext context, MobileScannerState state, _) {
+                final bool on = state.torchState == TorchState.on;
+                if (state.torchState == TorchState.unavailable) {
+                  return const SizedBox.shrink();
+                }
+                return IconButton(
+                  tooltip: on ? 'Torch off' : 'Torch on',
+                  icon: Icon(on ? Icons.flashlight_off : Icons.flashlight_on),
+                  onPressed: () => unawaited(_controller.toggleTorch()),
+                );
+              },
+            ),
+        ],
       ),
       body: SafeArea(
         child: Column(
@@ -109,14 +204,23 @@ class _QrScanScreenState extends State<QrScanScreen> {
                   if (!_cameraDenied)
                     MobileScanner(
                       controller: _controller,
-                      onDetect: _cameraReady ? _onDetect : null,
+                      // No onDetect here on purpose — see `_barcodes`.
+                      errorBuilder: (BuildContext context, MobileScannerException error) =>
+                          _CameraUnavailable(detail: _describe(error)),
                     )
                   else
-                    const _CameraUnavailable(),
+                    _CameraUnavailable(detail: _cameraProblem),
                   // The viewfinder: everything dimmed except a quiet rounded
                   // square, so the eye (and the camera) knows where to aim.
                   if (_cameraReady && !_handled)
                     const _ViewfinderOverlay(),
+                  if (_wrongCode != null)
+                    Positioned(
+                      left: 24,
+                      right: 24,
+                      bottom: 24,
+                      child: _WrongCodeLine(text: _wrongCode!),
+                    ),
                 ],
               ),
             ),
@@ -183,8 +287,35 @@ class _ViewfinderPainter extends CustomPainter {
       oldDelegate.cutout != cutout;
 }
 
+/// "That QR is not a SALU code" — shown for three seconds over the preview.
+class _WrongCodeLine extends StatelessWidget {
+  const _WrongCodeLine({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final String shown = text.length > 48 ? '${text.substring(0, 48)}…' : text;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xCC000000),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        'That is not a SALU pairing code ($shown). Scan the QR inside the '
+        'PC\'s Remote panel.',
+        textAlign: TextAlign.center,
+        style: const TextStyle(color: AppColors.barThumb, fontSize: 13),
+      ),
+    );
+  }
+}
+
 class _CameraUnavailable extends StatelessWidget {
-  const _CameraUnavailable();
+  const _CameraUnavailable({this.detail});
+
+  final String? detail;
 
   @override
   Widget build(BuildContext context) {
@@ -194,7 +325,7 @@ class _CameraUnavailable extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Icon(Icons.no_photography, size: 44, color: AppColors.statusUnknown),
+            const Icon(Icons.no_photography, size: 44, color: AppColors.statusUnknown),
             const SizedBox(height: 14),
             Text(
               'No camera',
@@ -202,7 +333,8 @@ class _CameraUnavailable extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              'Allow camera access in the system settings and reopen this screen.',
+              detail ??
+                  'Allow camera access in the system settings and reopen this screen.',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,
             ),

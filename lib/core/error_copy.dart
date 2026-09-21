@@ -73,6 +73,10 @@ abstract final class RemoteErrorCopy {
         return 'The PC did not accept this phone.';
       case 'unreachable':
         return "Can't reach the PC.";
+      case 'refused':
+        return 'That address is not a SALU Remote.';
+      case 'not_paired':
+        return 'This phone is not paired with the PC yet.';
       default:
         return fromPc ?? 'Something went wrong.';
     }

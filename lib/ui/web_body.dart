@@ -210,7 +210,7 @@ class _WebBodyState extends State<WebBody> {
       children: <Widget>[
         InkWell(
           borderRadius: BorderRadius.circular(14),
-          onTap: () => unawaited(_urlDialog(context)),
+          onTap: () => unawaited(_urlDialog()),
           child: SaluCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -344,7 +344,7 @@ class _WebBodyState extends State<WebBody> {
         OutlinedButton.icon(
           icon: const Icon(Icons.link),
           label: const Text('Open a URL on the PC'),
-          onPressed: () => unawaited(_urlDialog(context)),
+          onPressed: () => unawaited(_urlDialog()),
         ),
       ],
     );
@@ -356,7 +356,11 @@ class _WebBodyState extends State<WebBody> {
   /// type or paste on the phone, the PC browser goes there. The field is
   /// pre-filled with the clipboard when it holds a URL (the one-keyboard
   /// rule, §12).
-  Future<void> _urlDialog(BuildContext context) async {
+  ///
+  /// Uses the State's own [context] rather than a caller-supplied one: the
+  /// clipboard read is an async gap, and only `State.mounted` can vouch for
+  /// `State.context` afterwards (`use_build_context_synchronously`).
+  Future<void> _urlDialog() async {
     final TextEditingController text = TextEditingController();
     final String current = widget.snapshot.web.url ?? '';
     // Check the clipboard before the dialog opens, so the field is

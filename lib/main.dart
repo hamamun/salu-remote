@@ -211,14 +211,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     switch (state) {
       case LinkState.online:
         colour = AppColors.statusAlive;
+        break;
       case LinkState.connecting:
         colour = AppColors.accent;
+        break;
       case LinkState.needsPairing:
         colour = AppColors.statusDead;
+        break;
       case LinkState.idle:
       case LinkState.unreachable:
       case LinkState.off:
         colour = AppColors.statusUnknown;
+        break;
     }
     return Container(
       width: 9,

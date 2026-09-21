@@ -77,7 +77,7 @@ abstract final class SaluTheme {
       scaffoldBackgroundColor: AppColors.background,
       canvasColor: AppColors.background,
       dividerColor: AppColors.divider,
-      appBarTheme: const AppBarTheme(
+      appBarTheme: const AppBarThemeData(
         backgroundColor: AppColors.background,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
@@ -108,7 +108,7 @@ abstract final class SaluTheme {
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(foregroundColor: AppColors.accent),
       ),
-      inputDecorationTheme: InputDecorationTheme(
+      inputDecorationTheme: InputDecorationThemeData(
         filled: true,
         fillColor: AppColors.videoBackdrop,
         hintStyle: const TextStyle(color: AppColors.statusUnknown),

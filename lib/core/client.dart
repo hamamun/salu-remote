@@ -122,6 +122,7 @@ class SaluClient {
     'version_mismatch',
     'auth_timeout',
     'auth_required',
+    'auth_failed',
   };
 
   // ── lifecycle ─────────────────────────────────────────────────────────────
@@ -306,16 +307,22 @@ class SaluClient {
     switch (message['type']) {
       case 'hello':
         _onHello(message);
+        break;
       case 'auth_ok':
         unawaited(_onAuthOk(message));
+        break;
       case 'state':
         _applySnapshot(message);
+        break;
       case 'pong':
         _onPong(message);
+        break;
       case 'error':
         _onError(message);
+        break;
       default:
         _onResult(message);
+        break;
     }
   }
 

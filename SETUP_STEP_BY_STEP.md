@@ -345,7 +345,7 @@ Look up your symptom, try the fix, and if it still fails send me the two things 
 | Everything worked yesterday, dead today | The PC's IP changed (the router reassigned it). Open the PC's Remote panel, read the new address, and type it into the app's *PC address* box. |
 | Red text in Android Studio under a file | Send me a screenshot of the file name and the red line. Do not "fix" it yourself. |
 | The build fails with `Java heap space` | Tell me — I will give you the one-line change for `android/gradle.properties`. |
-| Build stops with `Error: Gradle build failed due to Java/Gradle incompatibility` (and a bare version like `25.0.3` under `What went wrong:`) | Your Java is newer than the Gradle this repo pins (8.10.2 needs **Java 17–23**). Not a code problem — follow **README → “Build fails: Gradle build failed due to Java/Gradle incompatibility”**, Fix 1 (`flutter config --jdk-dir` → Android Studio's `jbr`, then `flutter clean`). |
+| Build stops with `Error: Gradle build failed due to Java/Gradle incompatibility` (a bare version like `25.0.3` under `What went wrong:`) | The Gradle the checkout pins is older than the Java Flutter builds with. **Already fixed here** — the repo now uses Gradle `9.3.1` + AGP `9.1.0` + Kotlin `2.4.0` (Flutter 3.47's own template numbers, good for Java 17–25). Just `git pull`, then `flutter clean` and press Run again. Walkthrough: **README → “Build fails: Gradle build failed due to Java/Gradle incompatibility”**. Do not downgrade those three versions, and do not edit `android/gradle.properties` to point at a JDK — that is the temporary workaround, not the fix. |
 
 ---
 

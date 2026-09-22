@@ -85,10 +85,21 @@ class SaluPlayback {
     this.muted = false,
     this.shuffle = false,
     this.repeat = RepeatMode.off,
+    this.resumePositionMs,
   });
 
   factory SaluPlayback.from(Object? raw) {
     final Map<String, Object?> map = _map(raw);
+    // `playback.resume` — the PC's Resume toast, mirrored
+    // (`remote.md` §17.4/§17.5). `null` when no toast is up, else
+    // `{"position": 754000}` — presence *is* the offer.
+    final Object? resumeRaw = map['resume'];
+    final int? resumeMs;
+    if (resumeRaw is Map && resumeRaw['position'] is num) {
+      resumeMs = (resumeRaw['position'] as num).toInt();
+    } else {
+      resumeMs = null;
+    }
     return SaluPlayback(
       state: _enumOf<TransportState>(TransportState.values, map['state'], TransportState.idle),
       hasMedia: _b(map['hasMedia']),
@@ -104,6 +115,7 @@ class SaluPlayback {
       muted: _b(map['muted']),
       shuffle: _b(map['shuffle']),
       repeat: _enumOf<RepeatMode>(RepeatMode.values, map['repeat'], RepeatMode.off),
+      resumePositionMs: resumeMs,
     );
   }
 
@@ -122,6 +134,16 @@ class SaluPlayback {
   final bool muted;
   final bool shuffle;
   final RepeatMode repeat;
+
+  /// The PC's Resume toast, mirrored (`remote.md` §17.4/§17.5).
+  /// `null` when no toast is up; the resumed-at position in ms while it is.
+  /// Presence *is* the offer — it makes and unmakes the phone's "Start over"
+  /// seat, and the phone draws no other conclusion from it.
+  final int? resumePositionMs;
+
+  /// Whether the PC's Resume toast is currently showing — the Start over
+  /// button appears on screen exactly when this is true.
+  bool get hasResume => resumePositionMs != null;
 
   bool get isPlaying => state == TransportState.playing;
   bool get isPaused => state == TransportState.paused;

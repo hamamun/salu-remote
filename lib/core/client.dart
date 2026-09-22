@@ -741,6 +741,10 @@ class SaluClient {
   Future<RemoteReply> muteToggle() => send('mute_toggle');
   Future<RemoteReply> shuffleToggle() => send('shuffle_toggle');
   Future<RemoteReply> repeatCycle() => send('repeat_cycle');
+  /// The toast's own Restart word-action (`remote.md` §17.4): jump to 0:00
+  /// and play, which also closes the PC's Resume toast so the phone's
+  /// "Start over" seat disappears on the next snapshot.
+  Future<RemoteReply> restart() => send('restart');
   Future<RemoteReply> takeControl() => send('take_control');
   Future<RemoteReply> stateGet() =>
       send('state_get', timeout: const Duration(seconds: 4));

@@ -354,10 +354,16 @@ class _PlayerBody extends StatelessWidget {
     );
   }
 
-  /// Repeat · shuffle — icon-only, on their own row (user, 2026-09-22:
-  /// "shuffle repeat mute fullscreen all should be icon based"). The repeat
-  /// icon itself says which mode is on: `repeat` for all, `repeat_one` for
-  /// one, accent-coloured whenever it is not off.
+  /// Repeat · shuffle · start over — icon-only, on their own row (user,
+  /// 2026-09-22: "shuffle repeat mute fullscreen all should be icon based").
+  /// The repeat icon itself says which mode is on: `repeat` for all,
+  /// `repeat_one` for one, accent-coloured whenever it is not off.
+  ///
+  /// **Start over** `⟲` is a conditional third seat (`remote_apk_ui.md` §4.1):
+  /// it mirrors the PC's Resume toast — appears when `playback.resume` is
+  /// non-null, disappears when the toast closes. Tap = `restart` (0:00 and
+  /// play, which also closes the toast). The seat never outlives the toast
+  /// and never appears without one, on either screen.
   Widget _toggles(BuildContext context) {
     final SaluPlayback playback = snapshot.playback;
     return SaluCard(
@@ -381,6 +387,18 @@ class _PlayerBody extends StatelessWidget {
             active: playback.shuffle,
             onPressed: () => unawaited(runRemote(context, client.shuffleToggle)),
           ),
+          // Start over — only while the PC's Resume toast is up.
+          // Plain `Icons.replay`; `replay_10` beside it in the transport
+          // row already owns the "−10 s" reading. Accent tint marks it as
+          // live rather than decorative.
+          if (playback.hasResume)
+            _control(
+              icon: Icons.replay,
+              tooltip:
+                  'Start over from ${SaluTheme.clock(Duration(milliseconds: playback.resumePositionMs!))}',
+              active: true,
+              onPressed: () => unawaited(runRemote(context, client.restart)),
+            ),
         ],
       ),
     );

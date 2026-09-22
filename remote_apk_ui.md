@@ -291,7 +291,7 @@ biggest usability win in the whole browser:
 │  [▶ Now playing] [⬇ Downloads] │
 │  [🎬 Videos] [🎵 Music] [🖥 Desktop] │
 │  Drives                  │
-│  [ C: ] [ D: ] [ E: ]    │ ← probing letters A–Z on the PC
+│  [ C: ] [ D: ] [ E: ]    │ ← the PC's real local drives only — network letters are never listed
 ```
 
 `Now playing` opens the folder of the file currently playing on the PC, so the next

@@ -37,6 +37,11 @@ class _QueueCardState extends State<QueueCard> {
   /// The protocol's per-call cap for `queue_get` (`remote.md` §17.4).
   static const int _pageSize = 100;
 
+  /// Delay between paged `queue_get` calls: ~22 pages/s keeps the phone
+  /// comfortably under the PC's per-connection budget of 30 commands/s
+  /// (which also has to carry pings and live-position traffic).
+  static const Duration _pageGap = Duration(milliseconds: 45);
+
   final SaluClient _client = SaluClient.instance;
   final ScrollController _scroll = ScrollController();
   List<QueueRow> _rows = const <QueueRow>[];
@@ -79,6 +84,16 @@ class _QueueCardState extends State<QueueCard> {
   /// Fetches the whole queue, [_pageSize] rows per call (the protocol's
   /// cap). For the everyday queue of ≤ 100 items this stays exactly the one
   /// call it always was.
+  ///
+  /// Two rules make it channel-list-proof (a 10 000-channel m3u needs ~100
+  /// pages, i.e. ~100 commands inside a second):
+  /// 1. Pages are paced under the PC's per-phone budget of ~30 commands/s —
+  ///    the socket also carries pings and position traffic, so headroom matters.
+  /// 2. `too_fast` is never shown on screen (a silent code,
+  ///    `error_copy.dart`): the phone waits out the one-second window and
+  ///    retries the same page instead. Only if even the retries fail does
+  ///    the card fall back to the ordinary "busy" wording — never the
+  ///    limiter's raw "Too many commands." text.
   Future<void> _fetch({bool autoscroll = false}) async {
     final int generation = ++_fetchGeneration;
     final int count = widget.snapshot.queue.count;
@@ -95,13 +110,22 @@ class _QueueCardState extends State<QueueCard> {
     if (mounted) setState(() => _loading = true);
     final List<QueueRow> all = <QueueRow>[];
     for (int from = 0; from < count; from += _pageSize) {
-      final RemoteReply reply =
-          await _client.queueGet(from: from, count: _pageSize);
+      RemoteReply reply = await _client.queueGet(from: from, count: _pageSize);
       if (!mounted || generation != _fetchGeneration) return;
+      for (int attempt = 0;
+          !reply.ok && reply.code == 'too_fast' && attempt < 2;
+          attempt++) {
+        await Future<void>.delayed(const Duration(seconds: 1));
+        if (!mounted || generation != _fetchGeneration) return;
+        reply = await _client.queueGet(from: from, count: _pageSize);
+        if (!mounted || generation != _fetchGeneration) return;
+      }
       if (!reply.ok || reply['rows'] is! List) {
         setState(() {
           _loading = false;
-          _error = RemoteErrorCopy.text(reply.code, reply.message);
+          _error = reply.code == 'too_fast'
+              ? RemoteErrorCopy.text('busy', null)
+              : RemoteErrorCopy.text(reply.code, reply.message);
         });
         return;
       }
@@ -110,6 +134,10 @@ class _QueueCardState extends State<QueueCard> {
       // claimed (it changed mid-fetch) — show what we have, not a hole.
       if (rows.isEmpty) break;
       all.addAll(rows);
+      if (from + _pageSize < count) {
+        await Future<void>.delayed(_pageGap);
+        if (!mounted || generation != _fetchGeneration) return;
+      }
     }
     if (!mounted || generation != _fetchGeneration) return;
     setState(() {

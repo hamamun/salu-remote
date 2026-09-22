@@ -145,6 +145,8 @@ class _FilesBrowserState extends State<FilesBrowser> {
     return raw
         .whereType<Map>()
         .map((Map m) => FsPlace.from(m.cast<String, Object?>()))
+        // Network drives never render — even if a PC build sends one.
+        .where((FsPlace p) => !p.isNetwork)
         .toList();
   }
 
@@ -515,7 +517,7 @@ class _FilesBrowserState extends State<FilesBrowser> {
             children: <Widget>[
               for (final FsPlace place in drives)
                 SaluChip(
-                  icon: Icons.sd_storage,
+                  icon: _driveIcon(place),
                   label: place.name,
                   onTap: () {
                     setState(() {
@@ -540,6 +542,24 @@ class _FilesBrowserState extends State<FilesBrowser> {
           ),
       ],
     );
+  }
+
+  /// Drive chips get an icon per medium once the PC reports it
+  /// (`medium: fixed · removable · optical · ram`); older PC builds send
+  /// nothing and keep the old sd-storage glyph.
+  IconData _driveIcon(FsPlace place) {
+    switch (place.medium) {
+      case 'fixed':
+        return Icons.storage;
+      case 'removable':
+        return Icons.usb;
+      case 'optical':
+        return Icons.album;
+      case 'ram':
+        return Icons.memory;
+      default:
+        return Icons.sd_storage;
+    }
   }
 
   IconData _placeIcon(String kind) {

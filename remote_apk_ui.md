@@ -158,8 +158,9 @@ set once and never touched again.
 │                          │
 │  ▶  ⏹  ⏮  ⏭  ⟲10 ⟳10 ⛶ │ ← one row, one style, one size (user,
 │                          │    2026-09-22): play/pause · stop · previous ·
-│         ⟳     ⤨          │    next · −10 s · +10 s · fullscreen
-│                          │ ← repeat · shuffle — icon-only row
+│         ⟳     ⤨  (⟲)     │    next · −10 s · +10 s · fullscreen
+│                          │ ← repeat · shuffle — icon-only row — plus
+│                          │    START OVER (⟲) while the PC offers it
 │  🔊 ███████░░░░   80     │ ← mute lives here, left of the slider — once
 ├──────────────────────────┤
 │ ▾ Queue · 12 items     ✕ │ ← collapsible card · clear button · 5 rows max
@@ -178,8 +179,18 @@ set once and never touched again.
   `repeat_one` when repeating one and lights with the accent whenever it is on. Mute
   sits at the left of the volume slider and nowhere else (it used to be doubled: chip
   *and* slider row).
-- **Fullscreen `⛶`** is the last seat of the transport row, not a toggle on the Play
-  button — you press it when you sit down, not mid-scene.
+- **Start over `⟲`** (user, 2026-09-22) is a **conditional third seat of the repeat ·
+  shuffle row**, and it is not a phone invention: it mirrors the PC's **Resume toast**.
+  The PC shows that toast when an item lands at a remembered position — *"you resumed at
+  12:34 — Restart?"* — and it lives 4 seconds (or until Esc, a click-outside, or any
+  transport action). While it is up, `playback.resume` carries `{"position":754000}`
+  (`remote.md` §17.4/§17.5) and the seat appears, showing the same clock in its tooltip;
+  the moment the toast closes the field goes `null` and the seat goes with it — **the seat
+  never outlives the toast and never appears without one**, on either screen. Tap =
+  `restart` (the toast's own Restart word-action: `0:00` and play, which also closes the
+  toast). Plain `Icons.replay` — `replay_10` beside it already owns the "−10 s" reading,
+  and the accent tint marks it as live rather than decorative. Icon-only, like every other
+  control in that row (user, 2026-09-22).
 - **Seek and volume sliders are realtime (user, 2026-09-22):** they stream throttled
   updates *while* the thumb moves (≈8/s — inside §8's budget) and send the final value
   on release, instead of one command on release only.
@@ -524,6 +535,7 @@ a silent failure:
 | Download in progress | *"Downloading…"* then *"Loaded"* — and on failure, the PC's own reason |
 | A path no longer exists | *"That file has moved or been deleted."* |
 | **Web page's player is out of reach** (cross-origin iframe / DRM) | Web body drops to the nav shape with one line: *"This site's player can't be controlled from outside."* |
+| **The PC's Resume toast is up** (an item landed at a remembered position) | The **Start over** seat appears in the repeat · shuffle row, tooltipped with the toast's own resumed-at clock — and disappears with the toast (§4.1). Never a phone-side offer of its own. |
 
 ---
 
@@ -541,6 +553,7 @@ later.** One table, so nobody has to guess:
 | File list | Skeleton rows while loading; never a spinner over the whole screen | Paged, 200 rows, cached by path in RAM |
 | Subtitle search / download | Progress row with the PC's reason on failure | One request, one result message, then a state push |
 | Queue jump | Row highlights immediately, PC catches up | One command |
+| Start over seat | Appears and disappears **with the PC's Resume toast** — never on a phone timer of its own, never optimistic: the tap sends `restart` and the seat goes when the PC's toast does | Nothing pushed for it beyond `playback.resume` in the snapshot (one int while the toast is up, `null` otherwise) |
 | Playlist card | Auto-scrolls to the current row on every track change; >5 rows scroll inside the 5-row window (user, 2026-09-22) | Titles fetched in `queue_get` pages of 100 when `queue.count` changes; an index-only move is pure local scroll. Clear = confirm + one `queue_clear` |
 | Web media controls (play/pause/seek/volume/mute/fullscreen) | Optimistic icon + slider state, like transport | Position read ~1/s (`web_media_get`); commands one at a time |
 

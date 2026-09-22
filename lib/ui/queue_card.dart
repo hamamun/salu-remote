@@ -209,7 +209,8 @@ class _QueueCardState extends State<QueueCard> {
     // Five rows at most; fewer when the queue is shorter. The +1 px per
     // separator keeps the last row from being clipped by its own divider.
     final int shown = _rows.length < _visibleRows ? _rows.length : _visibleRows;
-    final double listHeight = shown * _rowHeight + (shown > 1 ? shown - 1 : 0);
+    final double listHeight =
+        shown * _rowHeight + (shown > 1 ? shown - 1 : 0).toDouble();
     return SectionCard(
       title: 'Queue',
       trailing: '${queue.count} ${queue.count == 1 ? 'item' : 'items'}',

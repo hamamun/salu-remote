@@ -11,9 +11,12 @@ The current build contains the full v2 scope:
 - **Pairing two ways** — in-app QR scan (camera, via `mobile_scanner`) and the
   `salu://pair` deep link, both landing in the connect sheet with the PC pre-filled;
 - **the three-tab interface** (Play · Browse · Tune):
-  - **Play** — transport, seek, volume, shuffle/repeat, the now-playing/queue
-    card (tap a row to jump), the mode pill, secondary chips, and the web body
-    (url/iframe switch, back/forward/reload) with its own web volume;
+  - **Play** — one icon-only transport row (play/pause · stop · previous ·
+    next · −10 s · +10 s · fullscreen), a repeat · shuffle icon row,
+    realtime seek/volume sliders (they fire while dragging), mute + volume,
+    the now-playing/queue card (tap a row to jump, ✕ clears the playlist),
+    the mode pill, and the web body (url/iframe switch, back/forward/reload)
+    with its own web volume;
   - **Browse** — Files (PC's own file tree, read-only) and Streams (saved
     streams with the PC's health verdict), greyed out while the PC is in web
     mode;

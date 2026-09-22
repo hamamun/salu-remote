@@ -122,7 +122,7 @@ element, so a user who never touches EQ never sees it again:
 Settings → Play screen
   [✓] Volume row              [ ] Tune tab
   [✓] Mode pill (Player/Web)  [ ] Streams segment
-  [✓] Secondary chips         [ ] Subtitles card
+  [✓] Shuffle & repeat row    [ ] Subtitles card
   [✓] Queue card              [ ] Speed chips (in Tune → Equalizer)
   [✓] Mini now-playing strip on Browse / Tune
 ```
@@ -152,31 +152,44 @@ set once and never touched again.
 ├──────────────────────────┤
 │  Big Buck Bunny          │
 │  ┌────────────────────┐  │
-│  │███████░░░░░░░░░░░░░│  │ ← seek: drag anywhere, amber hairline
-│  └────────────────────┘  │    while a seek is in flight
+│  │███████░░░░░░░░░░░░░│  │ ← seek: fires *while* dragging (throttled),
+│  └────────────────────┘  │    final value on release
 │  12:34            45:12  │
 │                          │
-│  ⏮    ⟲10   (▶)   ⟳10  ⏭│ ← 72dp play, 48dp rest
-│                          │
-│  ⏹   ⤨  ⟳  ⛶   ☰        │ ← chips: Stop·Shuffle·Repeat·Fullscreen·Queue
-│                          │
-│  🔊 ███████░░░░   80     │
+│  ▶  ⏹  ⏮  ⏭  ⟲10 ⟳10 ⛶ │ ← one row, one style, one size (user,
+│                          │    2026-09-22): play/pause · stop · previous ·
+│         ⟳     ⤨          │    next · −10 s · +10 s · fullscreen
+│                          │ ← repeat · shuffle — icon-only row
+│  🔊 ███████░░░░   80     │ ← mute lives here, left of the slider — once
 ├──────────────────────────┤
-│ ▾ Queue · 12 items       │ ← collapsible card · 5 rows max
-│   3  Episode 2.mkv       │ ← auto-scrolls so the current
-│ ▶ 4  Episode 3.mkv       │    row always stays in view
+│ ▾ Queue · 12 items     ✕ │ ← collapsible card · clear button · 5 rows max
+│   3  Episode 2.mkv       │ ← the whole playlist scrolls inside and
+│ ▶ 4  Episode 3.mkv       │    auto-scrolls so the current row stays in view
 └──────────────────────────┘
 ```
 
 - **Mode pill** sits on the header line: `◐ Player` / `◐ Web`. It is a *label and a
-  switch* — it always shows the PC's real mode (the PC drives it), and tapping it asks the
-  PC to switch. When the PC switches on its own, the pill animates to the new label.
-- **Fullscreen `⛶`** is a chip, not a toggle on the Play button — you press it when you
-  sit down, not mid-scene.
+  switch* — it always shows the PC's real mode (the PC drives it), and tapping it asks
+  the PC to switch. When the PC switches on its own, the pill animates to the new label.
+- **Every control is an icon at one size (user, 2026-09-22).** The transport row is
+  play/pause · stop · previous · next · −10 s · +10 s · fullscreen, all the same plain
+  icon button — no filled play button, no text chips (the old Stop chip is a seat in
+  this row). Repeat and shuffle sit below on their own icon-only row — repeat shows
+  `repeat_one` when repeating one and lights with the accent whenever it is on. Mute
+  sits at the left of the volume slider and nowhere else (it used to be doubled: chip
+  *and* slider row).
+- **Fullscreen `⛶`** is the last seat of the transport row, not a toggle on the Play
+  button — you press it when you sit down, not mid-scene.
+- **Seek and volume sliders are realtime (user, 2026-09-22):** they stream throttled
+  updates *while* the thumb moves (≈8/s — inside §8's budget) and send the final value
+  on release, instead of one command on release only.
 - **Queue is the playlist** (user, 2026-09-20): a collapsible card that shows **at most
-  5 rows**, scrolls inside, and **auto-scrolls so the now-playing row stays in view** the
-  moment the track changes. Tap a row to jump to it. It never pushes the transport
-  controls off-screen.
+  5 rows** and scrolls inside whenever there are **more than 5 items** — the whole
+  queue is fetched, 100 rows per `queue_get` call (user, 2026-09-22) — and
+  **auto-scrolls so the now-playing row stays in view** the moment the track changes.
+  Tap a row to jump to it. The **✕ in the header clears the playlist** (user,
+  2026-09-22): confirm → `queue_clear` → the PC stops and empties the queue (§17.4).
+  It never pushes the transport controls off-screen.
 - **Activity dot:** during any long PC job (folder read, subtitle search or download,
   queue page), a small dot pulses once next to the connection dot — appearing only after
   300 ms, so quick jobs never make it flicker. One dot, no text (user: "do what is best").
@@ -522,13 +535,13 @@ later.** One table, so nobody has to guess:
 | Feature | Phone behaviour | Network behaviour |
 |---|---|---|
 | Transport (play/pause/next/stop) | Instant state change + haptic | Fire immediately, one command |
-| Seek / volume sliders | Optimistic, locked against incoming updates while dragging | Throttled ≤ 20/s while dragging, one command on release |
+| Seek / volume sliders | Optimistic, locked against incoming updates while dragging; the PC moves **while** the thumb does (user, 2026-09-22) | Live: throttled ≈8/s while dragging (≤ 20/s budget), final value on release |
 | Fullscreen / mode / shuffle / repeat | Instant icon change | Fire immediately |
 | EQ bands | Curve + slider move locally | Continuous; the PC coalesces at 120 ms |
 | File list | Skeleton rows while loading; never a spinner over the whole screen | Paged, 200 rows, cached by path in RAM |
 | Subtitle search / download | Progress row with the PC's reason on failure | One request, one result message, then a state push |
 | Queue jump | Row highlights immediately, PC catches up | One command |
-| Playlist card | Auto-scrolls to the current row on every track change | Nothing — the snapshot's `queue.index/count` drives it; titles cached per index |
+| Playlist card | Auto-scrolls to the current row on every track change; >5 rows scroll inside the 5-row window (user, 2026-09-22) | Titles fetched in `queue_get` pages of 100 when `queue.count` changes; an index-only move is pure local scroll. Clear = confirm + one `queue_clear` |
 | Web media controls (play/pause/seek/volume/mute/fullscreen) | Optimistic icon + slider state, like transport | Position read ~1/s (`web_media_get`); commands one at a time |
 
 ---

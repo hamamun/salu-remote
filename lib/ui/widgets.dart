@@ -167,13 +167,15 @@ class SaluSegments extends StatelessWidget {
 
 /// A card with a tap-to-collapse header (`Queue · 12 items ⌄`, `Presets ⌄`,
 /// `Sync ⌄` — `remote_apk_ui.md` §3). The collapsed/expanded state is
-/// remembered per section in `RemotePrefs`.
+/// remembered per section in `RemotePrefs`. An optional [action] sits at the
+/// far end of the header row (the Queue card's clear button).
 class SectionCard extends StatefulWidget {
   const SectionCard({
     super.key,
     required this.title,
     required this.child,
     this.trailing,
+    this.action,
     this.memoryKey,
     this.expandedByDefault = true,
     this.padding = const EdgeInsets.fromLTRB(16, 6, 16, 14),
@@ -182,6 +184,10 @@ class SectionCard extends StatefulWidget {
   final String title;
   final Widget child;
   final String? trailing;
+
+  /// A button at the end of the header row. It lives **outside** the
+  /// collapse InkWell, so tapping it never collapses the card.
+  final Widget? action;
   final String? memoryKey;
   final bool expandedByDefault;
   final EdgeInsets padding;
@@ -203,35 +209,42 @@ class _SectionCardState extends State<SectionCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          InkWell(
-            borderRadius: BorderRadius.circular(10),
-            onTap: () => setState(() => _expanded = !_expanded),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Row(
-                children: <Widget>[
-                  Icon(
-                    _expanded
-                        ? Icons.keyboard_arrow_down
-                        : Icons.keyboard_arrow_right,
-                    size: 20,
-                    color: AppColors.iconIdle,
-                  ),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      widget.title,
-                      style: Theme.of(context).textTheme.titleMedium,
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(10),
+                  onTap: () => setState(() => _expanded = !_expanded),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Row(
+                      children: <Widget>[
+                        Icon(
+                          _expanded
+                              ? Icons.keyboard_arrow_down
+                              : Icons.keyboard_arrow_right,
+                          size: 20,
+                          color: AppColors.iconIdle,
+                        ),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            widget.title,
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                        ),
+                        if (widget.trailing != null)
+                          Text(
+                            widget.trailing!,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                      ],
                     ),
                   ),
-                  if (widget.trailing != null)
-                    Text(
-                      widget.trailing!,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                ],
+                ),
               ),
-            ),
+              if (widget.action != null) widget.action!,
+            ],
           ),
           if (_expanded) ...<Widget>[
             Padding(

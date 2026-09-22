@@ -750,6 +750,11 @@ class SaluClient {
       send('queue_get', args: <String, Object?>{'from': from, 'count': count});
   Future<RemoteReply> queueJump(int index) =>
       send('queue_jump', args: <String, Object?>{'index': index});
+  /// Empties the playlist and stops playback — the Queue card's clear button
+  /// (user, 2026-09-22). New in `remote.md` §17.4: a PC that has not caught
+  /// up yet answers `unknown_command`, which the card turns into its own
+  /// plain sentence instead of a silent no-op.
+  Future<RemoteReply> queueClear() => send('queue_clear');
 
   // Files — read-only, and only when the PC's `remote_file_access` is on.
   Future<RemoteReply> fsPlaces() => send('fs_places');

@@ -75,15 +75,22 @@ class _StreamsPaneState extends State<StreamsPane> {
   // ── add / play / rename / delete ─────────────────────────────────────────
 
   Future<void> _addDialog() async {
-    final TextEditingController url = TextEditingController();
+    // The one-keyboard rule (§12): the clipboard is checked first — and it
+    // really is FIRST, awaited before the dialog (and its controllers)
+    // exist. The old fire-and-forget `.then` could land after Cancel had
+    // already disposed the controllers — writing into a dead controller
+    // crashed the screen (the yellow/red exception view).
+    String clip = '';
+    try {
+      clip = (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '';
+    } catch (_) {
+      // No readable clipboard (OEM restrictions) — open without autofill.
+    }
+    if (!mounted) return;
+    final TextEditingController url =
+        TextEditingController(text: looksLikeUrl(clip) ? clip : '');
     final TextEditingController name = TextEditingController();
     bool save = true;
-    // The one-keyboard rule (§12): the clipboard is checked first.
-    Clipboard.getData(Clipboard.kTextPlain).then((ClipboardData? data) {
-      if (data?.text case final String? clip when looksLikeUrl(clip ?? '')) {
-        url.text = clip!;
-      }
-    });
     try {
       await showDialog<void>(
         context: context,

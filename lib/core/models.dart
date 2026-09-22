@@ -443,21 +443,45 @@ class QueuePage {
 }
 
 class FsPlace {
-  const FsPlace({required this.name, required this.path, required this.kind});
+  const FsPlace({
+    required this.name,
+    required this.path,
+    required this.kind,
+    this.medium = '',
+    this.net = false,
+  });
 
   factory FsPlace.from(Map<String, Object?> raw) => FsPlace(
         name: _s(raw['name'], '?'),
         path: _s(raw['path']),
         // drive · now_playing · downloads · videos · music · desktop
         kind: _s(raw['kind'], 'drive'),
+        // drives only: fixed · removable · optical · ram ('' = older PC build)
+        medium: _s(raw['medium']),
+        net: _b(raw['net']),
       );
 
   final String name;
   final String path;
   final String kind;
 
+  /// Drive medium the PC reported (`''` for quick places and older PCs).
+  final String medium;
+
+  /// PC flag for a network-backed place; network places are never shown.
+  final bool net;
+
   bool get isDrive => kind == 'drive';
   bool get isNowPlaying => kind == 'now_playing';
+
+  /// Belt-and-braces: hide anything network-backed even if a PC build sends
+  /// it — an explicit `net` flag, a network kind, or a UNC path.
+  bool get isNetwork =>
+      net ||
+      kind == 'network' ||
+      kind == 'network_drive' ||
+      path.startsWith(r'\\') ||
+      path.startsWith('//');
 }
 
 class FsEntry {

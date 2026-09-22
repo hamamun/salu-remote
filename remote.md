@@ -828,7 +828,7 @@ Two guards so one slow call can never freeze the remote:
 
 | File | Change |
 |---|---|
-| `lib/core/remote/remote_fs_service.dart` | **New.** Drive probe (probe `A:\`…`Z:\` with `Directory.existsSync` — two lines, no PowerShell), pinned places, directory listing with the media filter (`MediaUtils.isMedia` / `DropHandler.scanFolderForMedia` for whole folders), subtitle filter (`.srt .ass .sub .vtt`), system-folder hiding, sort, paging, path validation. Read-only: **no write API exists in this file at all**, by design. |
+| `lib/core/remote/remote_fs_service.dart` | **New.** Drive list from the Win32 drive table (`GetLogicalDrives` + `GetDriveTypeW` — **never** probed with `Directory.existsSync`; network and UNC letters are filtered out of the table before any file-system call can touch them, so disconnected mapped drives cannot stall the answer), pinned places, directory listing with the media filter (`MediaUtils.isMedia` / `DropHandler.scanFolderForMedia` for whole folders), subtitle filter (`.srt .ass .sub .vtt`), system-folder hiding, sort, paging, path validation. Read-only: **no write API exists in this file at all**, by design. |
 | `lib/core/remote/remote_browser_bridge.dart` | **New.** Mirrors the browser's active tab into `BrowserService` and routes remote nav commands back to the live `BrowserScreen` (§17.7). |
 | `lib/core/remote/remote_web_media_bridge.dart` | **New.** Drives the active web page's own `<video>`/`<audio>` element by JavaScript injection — play/pause, position, volume, mute, fullscreen (§17.11). Follows the existing `WebTab.executeScript` pattern (`_pauseAllMediaJs`, the exit-fullscreen script) — 2 s timeout, errors swallowed. |
 | `lib/core/remote/remote_command_handler.dart` | Extended with the §17.4 verbs. |
@@ -901,7 +901,7 @@ The rule that makes it one thing instead of two:
 
 | Verb | Args | PC call |
 |---|---|---|
-| `fs_places` | — | `RemoteFsService.places()` → drives + `Now playing` folder + Downloads / Videos / Music / Desktop (the `Now playing` path comes from `PlayerService.currentPath`) |
+| `fs_places` | — | `RemoteFsService.places()` → drives + `Now playing` folder + Downloads / Videos / Music / Desktop (the `Now playing` path comes from `PlayerService.currentPath`). Each drive carries `medium: fixed\|removable\|optical\|ram`; network drives are never listed, and a quick place (or `Now playing`) whose folder lives on the network is skipped silently |
 | `fs_list` | `{path, from, count, filter:"media"\|"subs"\|"all", showSystem}` | `RemoteFsService.list(...)` |
 | `fs_open` | `{paths:[…], mode:"play"\|"queue"\|"append"}` (≤ 500 paths per call — the multi-select cap) | file → `PlayerService`/`QueueService`; folder → `DropHandler.scanFolderForMedia` then queue; `.m3u`/`.m3u8` → `ChannelLoadService.openSource` |
 | `fs_load_sub` | `{path}` | `PlayerService.loadSubtitleFile(path)` (subtitle-picker mode) |
@@ -1024,7 +1024,7 @@ its own rules:
 - **Media filter on by default**, system folders hidden by default (`Windows`,
   `Program Files*`, `ProgramData`, `$Recycle.Bin`, `System Volume Information`, `AppData`,
   `node_modules`, `WindowsApps`), both overridable per request — never globally.
-- **Drives are enumerated, network shares are not** (no UNC paths in v1).
+- **Drives are enumerated, network shares are not** (no UNC paths in v1). The enumeration comes from the Win32 drive table (`GetLogicalDrives` + `GetDriveTypeW`), never from `existsSync`: letters of type `DRIVE_REMOTE` and UNC paths are dropped before any file-system call can touch them, because probing a disconnected mapped drive blocks the PC for tens of seconds per letter (the 2026-09-22 `fs_places` hang). Volume labels are read only for local drives, off the handler isolate, with a short budget and a bare-letter fallback.
 - **The OpenSubtitles API key, username and password never leave the PC.** The phone sends a
   query and gets rows; the PC authenticates. `subs_download` is a request, not a credential.
 - Rate limit still 30 cmd/s per device; `fs_list` additionally has a 1-per-200 ms floor so a
@@ -1067,7 +1067,7 @@ itself to move into `BrowserService`; that is deliberately **v2** so v1.1 stays 
 
 ### 17.9 Tests and checklist additions
 
-Unit tests: `remote_fs_test.dart` (drive probe, media/subtitle filters, system-folder rules,
+Unit tests: `remote_fs_test.dart` (drive-table enumeration incl. network/UNC filtering and empty-drive skipping, media/subtitle filters, system-folder rules,
 paging, path validation, **and an assertion that no write API exists**),
 `remote_tune_test.dart` (preset sets per `fileKind`, ±12 dB clamp, 0.5 dB quantization,
 gesture begin/end pairing, speed-stop key mapping),

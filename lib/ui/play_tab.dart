@@ -196,7 +196,10 @@ class _PlayTabState extends State<PlayTab> {
   }
 }
 
-/// The Player-mode body: now playing → transport → chips → volume → queue.
+/// The Player-mode body (layout per user, 2026-09-22):
+/// now playing (title + seek bar) → one transport row (play/pause · stop ·
+/// previous · next · −10 s · +10 s · fullscreen, all one style and one size)
+/// → repeat · shuffle (icon-only row) → mute + volume slider → queue.
 /// Focus mode keeps only now playing, transport and volume
 /// (`remote_apk_ui.md` §3, mechanism 1).
 class _PlayerBody extends StatelessWidget {
@@ -215,12 +218,16 @@ class _PlayerBody extends StatelessWidget {
         _nowPlaying(context),
         const SizedBox(height: 14),
         _transport(context),
+        // The old text chips are gone (user, 2026-09-22): stop and fullscreen
+        // moved into the transport row as icons, mute lives with the volume
+        // slider, and repeat + shuffle keep their own icon-only row — still
+        // behind the "secondary chips" setting and hidden in focus mode.
         if (!focusMode && RemotePrefs.instance.isShown(PlaySection.chips)) ...<Widget>[
           const SizedBox(height: 14),
-          _chips(context),
+          _toggles(context),
         ],
         // Focus mode keeps the volume row (it is part of "eyes closed") —
-        // only the chips and the queue card hide.
+        // only the toggles row and the queue card hide.
         if (RemotePrefs.instance.isShown(PlaySection.volume)) ...<Widget>[
           const SizedBox(height: 14),
           _volume(context),
@@ -249,11 +256,13 @@ class _PlayerBody extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           if (playback.seekable)
-            // Optimistic locally, one `seek_to` on release. The PC clamps it.
-            CommitSlider(
+            // Realtime while dragging (user, 2026-09-22): throttled `seek_to`
+            // updates as the thumb moves, final value on release. Optimistic
+            // locally; the PC clamps.
+            LiveSlider(
               value: playback.position.inMilliseconds.toDouble(),
               max: playback.duration.inMilliseconds.toDouble(),
-              onCommit: (double value) =>
+              onLive: (double value) =>
                   unawaited(runRemote(context, () => client.seekTo(value.round()))),
             )
           else
@@ -292,91 +301,112 @@ class _PlayerBody extends StatelessWidget {
     );
   }
 
+  /// One row, one style, one size (user, 2026-09-22):
+  /// play/pause · stop · previous · next · −10 s · +10 s · fullscreen.
+  /// No filled play button anymore and no text chips — every seat is the
+  /// same plain icon at the same size.
   Widget _transport(BuildContext context) {
     final bool playing = snapshot.playback.isPlaying;
+    final bool fullscreen = snapshot.window.fullscreen;
     return SaluCard(
-      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: <Widget>[
-          IconButton(
-            iconSize: 30,
-            tooltip: 'Previous',
-            onPressed: () => unawaited(runRemote(context, client.previous)),
-            icon: const Icon(Icons.skip_previous),
-          ),
-          IconButton(
-            iconSize: 30,
-            tooltip: 'Back 10 seconds',
-            onPressed: () => unawaited(runRemote(context, () => client.seekBy(-10000))),
-            icon: const Icon(Icons.replay_10),
-          ),
-          IconButton.filled(
-            iconSize: 40,
+          _control(
+            icon: playing ? Icons.pause : Icons.play_arrow,
             tooltip: playing ? 'Pause' : 'Play',
             onPressed: () => unawaited(runRemote(context, client.playPause)),
-            icon: Icon(playing ? Icons.pause : Icons.play_arrow),
           ),
-          IconButton(
-            iconSize: 30,
-            tooltip: 'Forward 10 seconds',
-            onPressed: () => unawaited(runRemote(context, () => client.seekBy(10000))),
-            icon: const Icon(Icons.forward_10),
+          _control(
+            icon: Icons.stop,
+            tooltip: 'Stop',
+            onPressed: () => unawaited(runRemote(context, client.stop)),
           ),
-          IconButton(
-            iconSize: 30,
+          _control(
+            icon: Icons.skip_previous,
+            tooltip: 'Previous',
+            onPressed: () => unawaited(runRemote(context, client.previous)),
+          ),
+          _control(
+            icon: Icons.skip_next,
             tooltip: 'Next',
             onPressed: () => unawaited(runRemote(context, client.next)),
-            icon: const Icon(Icons.skip_next),
+          ),
+          _control(
+            icon: Icons.replay_10,
+            tooltip: 'Back 10 seconds',
+            onPressed: () => unawaited(runRemote(context, () => client.seekBy(-10000))),
+          ),
+          _control(
+            icon: Icons.forward_10,
+            tooltip: 'Forward 10 seconds',
+            onPressed: () => unawaited(runRemote(context, () => client.seekBy(10000))),
+          ),
+          _control(
+            icon: fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+            tooltip: fullscreen ? 'Exit fullscreen' : 'Fullscreen',
+            active: fullscreen,
+            onPressed: () => unawaited(runRemote(context, client.fullscreenToggle)),
           ),
         ],
       ),
     );
   }
 
-  Widget _chips(BuildContext context) {
+  /// Repeat · shuffle — icon-only, on their own row (user, 2026-09-22:
+  /// "shuffle repeat mute fullscreen all should be icon based"). The repeat
+  /// icon itself says which mode is on: `repeat` for all, `repeat_one` for
+  /// one, accent-coloured whenever it is not off.
+  Widget _toggles(BuildContext context) {
     final SaluPlayback playback = snapshot.playback;
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: <Widget>[
-        SaluChip(
-          icon: Icons.stop,
-          label: 'Stop',
-          onTap: () => unawaited(runRemote(context, client.stop)),
-        ),
-        SaluChip(
-          icon: Icons.shuffle,
-          label: 'Shuffle',
-          active: playback.shuffle,
-          onTap: () => unawaited(runRemote(context, client.shuffleToggle)),
-        ),
-        SaluChip(
-          icon: Icons.repeat,
-          label: switch (playback.repeat) {
-            RepeatMode.off => 'Repeat',
-            RepeatMode.all => 'Repeat all',
-            RepeatMode.one => 'Repeat one',
-          },
-          active: playback.repeat != RepeatMode.off,
-          onTap: () => unawaited(runRemote(context, client.repeatCycle)),
-        ),
-        SaluChip(
-          icon: playback.muted ? Icons.volume_off : Icons.volume_up,
-          label: playback.muted ? 'Unmute' : 'Mute',
-          active: playback.muted,
-          onTap: () => unawaited(runRemote(context, client.muteToggle)),
-        ),
-        SaluChip(
-          icon: Icons.fullscreen,
-          label: snapshot.window.fullscreen ? 'Exit fullscreen' : 'Fullscreen',
-          active: snapshot.window.fullscreen,
-          onTap: () => unawaited(runRemote(context, client.fullscreenToggle)),
-        ),
-      ],
+    return SaluCard(
+      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: <Widget>[
+          _control(
+            icon: playback.repeat == RepeatMode.one ? Icons.repeat_one : Icons.repeat,
+            tooltip: switch (playback.repeat) {
+              RepeatMode.off => 'Repeat off',
+              RepeatMode.all => 'Repeat all',
+              RepeatMode.one => 'Repeat one',
+            },
+            active: playback.repeat != RepeatMode.off,
+            onPressed: () => unawaited(runRemote(context, client.repeatCycle)),
+          ),
+          _control(
+            icon: Icons.shuffle,
+            tooltip: playback.shuffle ? 'Shuffle on' : 'Shuffle off',
+            active: playback.shuffle,
+            onPressed: () => unawaited(runRemote(context, client.shuffleToggle)),
+          ),
+        ],
+      ),
     );
   }
 
+  /// The one control-button shape — every transport and toggle seat uses it,
+  /// so the whole block is the same style at the same size. [active] tints
+  /// the icon with the accent.
+  Widget _control({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onPressed,
+    bool active = false,
+  }) {
+    return IconButton(
+      iconSize: 26,
+      visualDensity: VisualDensity.compact,
+      tooltip: tooltip,
+      onPressed: onPressed,
+      icon: Icon(icon, color: active ? AppColors.accent : AppColors.iconIdle),
+    );
+  }
+
+  /// Mute + volume (user, 2026-09-22): the **one** mute button lives at the
+  /// left of the slider — the second copy that used to sit in the chip row is
+  /// gone. The slider fires live while dragging, like the seek bar.
   Widget _volume(BuildContext context) {
     final SaluPlayback playback = snapshot.playback;
     return SaluCard(
@@ -390,10 +420,10 @@ class _PlayerBody extends StatelessWidget {
                 color: playback.muted ? AppColors.statusDead : AppColors.iconIdle),
           ),
           Expanded(
-            child: CommitSlider(
+            child: LiveSlider(
               value: playback.volume.toDouble(),
               max: 100,
-              onCommit: (double value) =>
+              onLive: (double value) =>
                   unawaited(runRemote(context, () => client.setVolume(value.round()))),
             ),
           ),

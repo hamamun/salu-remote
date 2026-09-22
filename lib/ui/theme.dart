@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 /// SALU's colour vocabulary, ported from the PC (`lib/theme/app_theme.dart`).
@@ -193,6 +195,108 @@ class _CommitSliderState extends State<CommitSlider> {
         setState(() => _dragging = null);
         widget.onCommit(next);
       },
+    );
+  }
+}
+
+/// A slider that fires **while you drag**, not only when you let go
+/// (user, 2026-09-22: "instead of release it will be realtime").
+///
+/// Like [CommitSlider] it is optimistic — locked against incoming snapshots
+/// while the finger is down, so the thumb never snaps back mid-drag — but
+/// every drag also streams throttled updates to the PC. The throttle keeps
+/// ~8 sends/second: inside `remote_apk_ui.md` §8's "≤ 20/s while dragging"
+/// and well inside the PC's 30 commands/second budget. A trailing timer
+/// guarantees the newest value always goes out even if the finger stops
+/// moving before lifting, and the release sends the final value exactly once.
+class LiveSlider extends StatefulWidget {
+  const LiveSlider({
+    super.key,
+    required this.value,
+    required this.max,
+    required this.onLive,
+    this.gap = const Duration(milliseconds: 120),
+  });
+
+  /// The PC's latest value — ignored while dragging.
+  final double value;
+  final double max;
+
+  /// Called with the raw slider value: throttled during the drag, and one
+  /// last time with the final value when the finger lifts.
+  final ValueChanged<double> onLive;
+
+  /// The minimum time between two sends while dragging.
+  final Duration gap;
+
+  @override
+  State<LiveSlider> createState() => _LiveSliderState();
+}
+
+class _LiveSliderState extends State<LiveSlider> {
+  double? _dragging;
+  double? _lastSent;
+  Timer? _trailing;
+
+  /// Time since the last send. Started on the first send of a gesture, so
+  /// "not running" always means "nothing sent yet — go now".
+  final Stopwatch _sinceLast = Stopwatch();
+
+  @override
+  void dispose() {
+    _trailing?.cancel();
+    super.dispose();
+  }
+
+  void _send(double value) {
+    if (_lastSent == value) return; // Never the same value twice in a row.
+    _lastSent = value;
+    _sinceLast
+      ..reset()
+      ..start();
+    widget.onLive(value);
+  }
+
+  void _onChanged(double next) {
+    setState(() => _dragging = next);
+    if (!_sinceLast.isRunning || _sinceLast.elapsed >= widget.gap) {
+      _trailing?.cancel();
+      _trailing = null;
+      _send(next);
+      return;
+    }
+    // Inside the throttle window: (re)schedule the trailing edge, so the
+    // newest value still reaches the PC when the finger holds still.
+    _trailing?.cancel();
+    _trailing = Timer(widget.gap - _sinceLast.elapsed, () {
+      _trailing = null;
+      final double? dragging = _dragging;
+      if (dragging != null) _send(dragging);
+    });
+  }
+
+  void _onChangeEnd(double next) {
+    _trailing?.cancel();
+    _trailing = null;
+    setState(() => _dragging = null);
+    _send(next); // The final value always lands, exactly once.
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double max = widget.max <= 0 ? 1 : widget.max;
+    final double value = (_dragging ?? widget.value).clamp(0, max).toDouble();
+    return Slider(
+      value: value,
+      max: max,
+      onChangeStart: (double next) {
+        // A fresh gesture: the PC may have moved since this slider last
+        // sent, so the same-value guard starts over.
+        _lastSent = null;
+        _onChanged(next);
+      },
+      onChanged: _onChanged,
+      onChangeEnd: _onChangeEnd,
     );
   }
 }

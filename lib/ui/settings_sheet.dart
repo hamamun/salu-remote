@@ -151,7 +151,9 @@ abstract final class PlaySectionLabel {
       case PlaySection.modePill:
         return 'Mode pill (Player/Web)';
       case PlaySection.chips:
-        return 'Secondary chips';
+        // Was "Secondary chips"; the text chips became the icon-only
+        // repeat · shuffle row (user, 2026-09-22). Same settings key.
+        return 'Shuffle & repeat row';
       case PlaySection.queue:
         return 'Queue card';
       case PlaySection.miniStrip:

@@ -442,6 +442,10 @@ One consistent prefix, matching the repo's existing style:
 > What genuinely remains v2: `seek_chapter`, `track_set` for *style* overrides, full
 > browser tab management (new / close / select / downloads shelf), and queue *editing*
 > (remove / reorder — the phone can play and add, never rearrange).
+>
+> **⚠ Updated 2026-09-22:** one exception in queue editing — `queue_clear` (empty the
+> whole playlist) moved into §17.4 for the phone's clear button. Per-row remove and
+> reorder stay v2.
 
 `jump_to_index {index}` · `queue_get {from,count}` · `seek_chapter {delta}` ·
 `open_url {url}` · `channel_search {query}` · `channel_play {id}` ·
@@ -776,15 +780,19 @@ already exposes `search` / `save` / `saveAndLoad`; `OpenMediaService.playUrl` al
 
 ### 17.4 Verbs added in v1.1
 
-**Queue (read + jump only)** — the phone's playlist card. The v1 snapshot already carries
-`queue:{kind,count,index}`, so the card can auto-scroll from the snapshot alone; these two
-verbs fetch the row titles and jump. **Implement with R1, not R4** — the Play tab wants its
-playlist card on day one.
+**Queue (read + jump + clear)** — the phone's playlist card. The v1 snapshot already carries
+`queue:{kind,count,index}`, so the card can auto-scroll from the snapshot alone; these
+verbs fetch the row titles, jump, and clear. **Implement `queue_get`/`queue_jump` with R1,
+not R4** — the Play tab wants its playlist card on day one. `queue_clear` was added
+2026-09-22 (user request: the playlist card's clear button) — until the PC ships it, the
+phone answers its own `unknown_command` with one plain line ("needs a newer SALU on the
+PC"), so an old PC degrades visibly but safely.
 
 | Verb | Args | PC call |
 |---|---|---|
 | `queue_get` | `{from, count}` (count ≤ 100) | `QueueService` rows → `[{index, title, durationMs?, now}]` — titles only, never paths |
 | `queue_jump` | `{index}` | jump the queue to that row and play it (the reserved `jump_to_index`, renamed for symmetry) |
+| `queue_clear` | — | stop playback and empty `QueueService` → snapshot with `queue:{kind:"empty",count:0,index:-1}`. Idempotent: an already-empty queue is `ok`, never an error. |
 
 **Files** — all require `remote_file_access` ON (§17.6), else `file_access_off`.
 

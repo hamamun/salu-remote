@@ -804,6 +804,64 @@ class TuneInfo {
   }
 }
 
+bool _isGenericTrackTitle(String value) => RegExp(
+      r'^(?:(?:audio|subtitle)[\s_-]+)?track(?:[\s_-]*#?[\s_-]*\d+)?$',
+      caseSensitive: false,
+    ).hasMatch(value.trim());
+
+String? _trackText(Map<String, Object?> raw, List<String> keys) {
+  for (final String key in keys) {
+    final Object? value = raw[key];
+    if (value is String && value.trim().isNotEmpty) return value.trim();
+  }
+  return null;
+}
+
+String _bestTrackTitle(Map<String, Object?> raw) {
+  String? generic;
+  for (final String key in <String>[
+    'title',
+    'label',
+    'name',
+    'displayName',
+    'display_name',
+    'trackName',
+    'track_name',
+  ]) {
+    final String? value = _trackText(raw, <String>[key]);
+    if (value == null) continue;
+    generic ??= value;
+    if (!_isGenericTrackTitle(value)) return value;
+  }
+  return generic ?? 'Track';
+}
+
+String? _trackLanguageLabel(String? language) {
+  if (language == null || language.trim().isEmpty) return null;
+  final String value = language.trim();
+  final String code = value.toLowerCase().split(RegExp(r'[-_]')).first;
+  return switch (code) {
+    'en' || 'eng' => 'English',
+    'es' || 'spa' => 'Spanish',
+    'hi' || 'hin' => 'Hindi',
+    'cmn' => 'Mandarin',
+    'zh' || 'zho' || 'chi' => 'Chinese',
+    'bn' || 'ben' => 'Bengali',
+    'ar' || 'ara' => 'Arabic',
+    'de' || 'deu' || 'ger' => 'German',
+    'fr' || 'fra' || 'fre' => 'French',
+    'it' || 'ita' => 'Italian',
+    'ja' || 'jpn' => 'Japanese',
+    'ko' || 'kor' => 'Korean',
+    'pt' || 'por' => 'Portuguese',
+    'ru' || 'rus' => 'Russian',
+    'ta' || 'tam' => 'Tamil',
+    'te' || 'tel' => 'Telugu',
+    'ur' || 'urd' => 'Urdu',
+    _ => value,
+  };
+}
+
 class TrackInfo {
   const TrackInfo({
     required this.id,
@@ -815,15 +873,40 @@ class TrackInfo {
     this.selected = false,
   });
 
-  factory TrackInfo.from(Map<String, Object?> raw) => TrackInfo(
-        id: _s(raw['id']),
-        title: _s(raw['title'], 'Track'),
-        lang: _sn(raw['lang']),
-        codec: _sn(raw['codec']),
-        channels: _sn(raw['channels']),
-        external: _b(raw['external']),
-        selected: _b(raw['selected']),
-      );
+  factory TrackInfo.from(Map<String, Object?> raw) {
+    final Object? rawId =
+        raw['id'] ?? raw['trackId'] ?? raw['track_id'] ?? raw['key'];
+    return TrackInfo(
+      id: rawId is String
+          ? rawId
+          : rawId is num
+              ? rawId.toString()
+              : '',
+      title: _bestTrackTitle(raw),
+      lang: _trackText(raw, <String>[
+        'lang',
+        'language',
+        'languageName',
+        'language_name',
+        'languageLabel',
+        'languageCode',
+        'language_code',
+        'langCode',
+        'lang_code',
+      ]),
+      codec: _trackText(raw, <String>['codec', 'codecName', 'codec_name']),
+      channels: _trackText(
+        raw,
+        <String>['channels', 'channelLayout', 'channel_layout'],
+      ),
+      external: raw['external'] == true ||
+          raw['isExternal'] == true ||
+          raw['is_external'] == true,
+      selected: raw['selected'] == true ||
+          raw['isSelected'] == true ||
+          raw['is_selected'] == true,
+    );
+  }
 
   final String id;
   final String title;
@@ -833,10 +916,22 @@ class TrackInfo {
   final bool external;
   final bool selected;
 
-  /// "English · 5.1 AC3 (external)" — the row's one honest line.
+  /// Use a human language label when the PC gives only a generic track name.
+  String get displayTitle {
+    final String candidate = title.trim();
+    if (candidate.isNotEmpty && !_isGenericTrackTitle(candidate)) {
+      return candidate;
+    }
+    return _trackLanguageLabel(lang) ?? (candidate.isEmpty ? 'Track' : candidate);
+  }
+
+  /// "5.1 · AC3 · external" — language is already shown in [displayTitle].
   String get detail {
     final List<String> parts = <String>[];
-    if (lang != null && lang!.isNotEmpty) parts.add(lang!);
+    final String? language = _trackLanguageLabel(lang);
+    if (language != null && language.toLowerCase() != displayTitle.toLowerCase()) {
+      parts.add(language);
+    }
     if (channels != null && channels!.isNotEmpty) parts.add(channels!);
     if (codec != null && codec!.isNotEmpty) parts.add(codec!);
     if (external) parts.add('external');

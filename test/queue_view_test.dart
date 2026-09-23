@@ -135,20 +135,19 @@ void main() {
       );
     });
 
-    test('favourites-only thins rows but keeps the heads', () {
+    test('favourites-only grouped mode shows only favourite rows', () {
       final List<QueueDisplayItem> display = buildQueueDisplay(
         rows: rows(),
         groups: groups(),
         grouped: true,
+        // Sports is closed; its favourite must still be shown.
         openGroupKey: 'g-news',
         query: '',
         favouritesOnly: true,
         favourites: const <String>{'Evening News', 'Sports One'},
       );
-      expect(
-        titles(display),
-        <String>['H:Sports', 'H:News', 'Evening News'],
-      );
+      expect(display.every((QueueDisplayItem item) => item.isRow), isTrue);
+      expect(titles(display), <String>['Sports One', 'Evening News']);
     });
 
     test('favourites-only flat: bookmarks in queue order', () {
@@ -234,6 +233,46 @@ void main() {
         isEmpty,
       );
     });
+  });
+
+  test('current marker ignores stale queue_get now flag', () {
+    final List<QueueRow> fetchedRows = <QueueRow>[
+      QueueRow(index: 0, title: 'First', now: true),
+      QueueRow(index: 1, title: 'Second'),
+      QueueRow(index: 2, title: 'Third'),
+    ];
+    final List<QueueDisplayItem> display = buildQueueDisplay(
+      rows: fetchedRows,
+      groups: const <QueueGroup>[],
+      grouped: false,
+      openGroupKey: null,
+      query: '',
+      favouritesOnly: false,
+      favourites: const <String>{},
+    );
+
+    for (final int currentIndex in <int>[1, 2]) {
+      final List<QueueRow> highlighted = fetchedRows
+          .where((QueueRow row) => isCurrentQueueRow(row, currentIndex))
+          .toList();
+      expect(highlighted.map((QueueRow row) => row.index), <int>[currentIndex]);
+      expect(findQueueCurrentDisplayIndex(display, currentIndex), currentIndex);
+    }
+  });
+
+  test('current display position uses the group head for a hidden row', () {
+    final List<QueueDisplayItem> display = buildQueueDisplay(
+      rows: rows(),
+      groups: groups(),
+      grouped: true,
+      openGroupKey: 'g-sports',
+      query: '',
+      favouritesOnly: false,
+      favourites: const <String>{},
+    );
+
+    // Queue index 4 is in the collapsed News group, whose head is at row 4.
+    expect(findQueueCurrentDisplayIndex(display, 4), 4);
   });
 
   group('groupKeyForIndex', () {

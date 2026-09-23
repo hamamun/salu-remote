@@ -31,52 +31,161 @@ class SubtitlesPane extends StatefulWidget {
 }
 
 class _SubtitlesPaneState extends State<SubtitlesPane> {
+  static const int _visibleTrackRows = 5;
+  static const double _trackRowExtent = 64;
+
   final SaluClient _client = SaluClient.instance;
+  final ScrollController _tracksScroll = ScrollController();
   SubsInfo? _info;
   String? _error;
+  bool _requestInFlight = false;
+  bool _reloadPending = false;
+  Timer? _refreshTimer;
 
   @override
   void initState() {
     super.initState();
     widget.activeTab.addListener(_onActive);
+    if (widget.activeTab.value == widget.myIndex) _startPolling();
     unawaited(_load());
   }
 
   @override
   void dispose() {
     widget.activeTab.removeListener(_onActive);
+    _refreshTimer?.cancel();
+    _tracksScroll.dispose();
     super.dispose();
   }
 
   @override
   void didUpdateWidget(SubtitlesPane oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // A new file started on the PC: the track list of the old one is now a
-    // lie.
-    if (oldWidget.snapshot.playback.title != widget.snapshot.playback.title) {
+    if (oldWidget.activeTab != widget.activeTab) {
+      oldWidget.activeTab.removeListener(_onActive);
+      widget.activeTab.addListener(_onActive);
+      _syncPolling();
+    }
+
+    final SaluSnapshot old = oldWidget.snapshot;
+    final SaluSnapshot current = widget.snapshot;
+    // Snapshot counts and subtitle-on/off state are quick triggers. The
+    // one-second refresh below also catches a selection change between tracks
+    // when these compact snapshot values stay the same.
+    if (old.playback.title != current.playback.title ||
+        old.tracks.subs != current.tracks.subs ||
+        old.tracks.subSelected != current.tracks.subSelected ||
+        old.subs.delay != current.subs.delay ||
+        old.subs.lang != current.subs.lang ||
+        old.subs.autoDownload != current.subs.autoDownload ||
+        old.subs.engine.key != current.subs.engine.key ||
+        old.subs.engine.signedIn != current.subs.engine.signedIn ||
+        old.subs.engine.quotaPaused != current.subs.engine.quotaPaused) {
       unawaited(_load());
     }
   }
 
   void _onActive() {
-    if (widget.activeTab.value == widget.myIndex) unawaited(_load());
+    if (widget.activeTab.value == widget.myIndex) {
+      unawaited(_load());
+      _startPolling();
+    } else {
+      _stopPolling();
+    }
+  }
+
+  void _syncPolling() {
+    if (widget.activeTab.value == widget.myIndex) {
+      _startPolling();
+    } else {
+      _stopPolling();
+    }
+  }
+
+  void _startPolling() {
+    _refreshTimer ??= Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => unawaited(_load()),
+    );
+  }
+
+  void _stopPolling() {
+    _refreshTimer?.cancel();
+    _refreshTimer = null;
   }
 
   Future<void> _load() async {
-    setState(() {
-      _error = null;
-    });
-    final RemoteReply reply = await _client.subsGet();
-    if (!mounted) return;
-    if (reply.ok) {
-      setState(() {
-        _info = SubsInfo.from(reply.data);
-      });
-    } else {
-      setState(() {
-        _error = reply.message;
-      });
+    if (_requestInFlight) {
+      _reloadPending = true;
+      return;
     }
+    _requestInFlight = true;
+    if (mounted) setState(() => _error = null);
+
+    try {
+      final RemoteReply reply = await _client.subsGet();
+      if (!mounted) return;
+      if (reply.ok) {
+        final SubsInfo next = SubsInfo.from(reply.data);
+        final int? oldPosition =
+            _info == null ? null : _selectedRowPosition(_info!);
+        final int? nextPosition = _selectedRowPosition(next);
+        final String? oldId = _info == null ? null : _selectedTrackId(_info!);
+        final String? nextId = _selectedTrackId(next);
+        final bool shouldScroll =
+            _info == null || oldPosition != nextPosition || oldId != nextId;
+        setState(() {
+          _info = next;
+          _error = null;
+        });
+        if (shouldScroll) _scheduleScrollToSelected();
+      } else {
+        setState(() => _error = reply.message);
+      }
+    } finally {
+      _requestInFlight = false;
+      if (mounted && _reloadPending) {
+        _reloadPending = false;
+        unawaited(_load());
+      }
+    }
+  }
+
+  int _selectedRowPosition(SubsInfo info) {
+    final int selected =
+        info.subTracks.indexWhere((TrackInfo track) => track.selected);
+    // The off choice is the final row and is selected when no subtitle is on.
+    return selected < 0 ? info.subTracks.length : selected;
+  }
+
+  String? _selectedTrackId(SubsInfo info) {
+    for (final TrackInfo track in info.subTracks) {
+      if (track.selected) return track.id;
+    }
+    return null;
+  }
+
+  void _scheduleScrollToSelected() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_tracksScroll.hasClients || _info == null) return;
+      final int selected = _selectedRowPosition(_info!);
+      if (_info!.subTracks.isEmpty) return;
+      final double target =
+          (selected * _trackRowExtent -
+                  (_visibleTrackRows - 1) * _trackRowExtent / 2)
+              .clamp(0.0, _tracksScroll.position.maxScrollExtent)
+              .toDouble();
+      _tracksScroll.animateTo(
+        target,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  double _trackViewportHeight(int rowCount) {
+    final int visible = rowCount < _visibleTrackRows ? rowCount : _visibleTrackRows;
+    return visible * _trackRowExtent;
   }
 
   // ── actions ──────────────────────────────────────────────────────────────
@@ -107,6 +216,8 @@ class _SubtitlesPaneState extends State<SubtitlesPane> {
               .toList(),
         );
       });
+      _scheduleScrollToSelected();
+      unawaited(_load());
     }
   }
 
@@ -233,11 +344,25 @@ class _SubtitlesPaneState extends State<SubtitlesPane> {
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 )
-              : Column(
-                  children: <Widget>[
-                    for (final TrackInfo track in info.subTracks) _trackRow(track),
-                    _offRow(selected: !anySelected, onTap: () => unawaited(_selectSub('no'))),
-                  ],
+              : SizedBox(
+                  height: _trackViewportHeight(info.subTracks.length + 1),
+                  child: Scrollbar(
+                    controller: _tracksScroll,
+                    thumbVisibility: info.subTracks.length + 1 > _visibleTrackRows,
+                    child: ListView.builder(
+                      controller: _tracksScroll,
+                      itemCount: info.subTracks.length + 1,
+                      itemExtent: _trackRowExtent,
+                      padding: EdgeInsets.zero,
+                      itemBuilder: (BuildContext context, int index) =>
+                          index < info.subTracks.length
+                              ? _trackRow(info.subTracks[index])
+                              : _offRow(
+                                  selected: !anySelected,
+                                  onTap: () => unawaited(_selectSub('no')),
+                                ),
+                    ),
+                  ),
                 ),
         ),
         const SizedBox(height: 14),
@@ -317,42 +442,47 @@ class _SubtitlesPaneState extends State<SubtitlesPane> {
     return InkWell(
       borderRadius: BorderRadius.circular(10),
       onTap: () => unawaited(_selectSub(track.id)),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-        child: Row(
-          children: <Widget>[
-            Icon(
-              track.selected
-                  ? Icons.radio_button_checked
-                  : Icons.radio_button_off,
-              size: 18,
-              color: track.selected ? AppColors.accent : AppColors.statusUnknown,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    track.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: track.selected ? FontWeight.w600 : FontWeight.w400,
-                    ),
-                  ),
-                  if (track.detail.isNotEmpty)
+      child: SizedBox(
+        height: _trackRowExtent,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          child: Row(
+            children: <Widget>[
+              Icon(
+                track.selected
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_off,
+                size: 18,
+                color: track.selected ? AppColors.accent : AppColors.statusUnknown,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: <Widget>[
                     Text(
-                      track.detail,
+                      track.displayTitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight:
+                            track.selected ? FontWeight.w600 : FontWeight.w400,
+                      ),
                     ),
-                ],
+                    if (track.detail.isNotEmpty)
+                      Text(
+                        track.detail,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -362,20 +492,23 @@ class _SubtitlesPaneState extends State<SubtitlesPane> {
     return InkWell(
       borderRadius: BorderRadius.circular(10),
       onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-        child: Row(
-          children: <Widget>[
-            Icon(
-              selected
-                  ? Icons.radio_button_checked
-                  : Icons.radio_button_off,
-              size: 18,
-              color: selected ? AppColors.accent : AppColors.statusUnknown,
-            ),
-            const SizedBox(width: 10),
-            const Text('off', style: TextStyle(fontSize: 14)),
-          ],
+      child: SizedBox(
+        height: _trackRowExtent,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          child: Row(
+            children: <Widget>[
+              Icon(
+                selected
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_off,
+                size: 18,
+                color: selected ? AppColors.accent : AppColors.statusUnknown,
+              ),
+              const SizedBox(width: 10),
+              const Text('off', style: TextStyle(fontSize: 14)),
+            ],
+          ),
         ),
       ),
     );

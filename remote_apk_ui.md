@@ -207,8 +207,9 @@ set once and never touched again.
   while there is text), and the **bookmark sits beside the clear button** (channels
   only). Typing filters rows by title and flattens grouped modes until it clears (the
   PC's §10.3 rule); channel rows carry the PC's bookmark (solid when saved, dim
-  outline otherwise) and the header bookmark thins the list to favourites. Favourites
-  are kept on the phone by title — the phone never holds the PC's stable channel keys.
+  outline otherwise) and the header bookmark shows only favourite channels, in a flat
+  list without group heads. Favourites are kept on the phone by title — the phone never
+  holds the PC's stable channel keys.
 - **Channel grouping is the PC's accordion (user, 2026-09-23):** in a grouped mode
   every head paints but only the open group's channels do (autohide) — a head tap
   toggles, it never plays, and the group holding the playing channel opens on its own
@@ -447,6 +448,9 @@ and the Speed line** to the phone (Speed is right below); Picture and Aspect sta
 - **Tuning while you drag:** the APK sends band changes continuously; the PC already
   coalesces them (`TuneService.eqWriteGap = 120 ms`), so no extra throttle is needed on
   either side. Send the whole 10-gain curve on release — never a diff.
+- **Keep the curve in sync while Equalizer is open:** refresh from `tune_get` while this
+  pane is active so PC-side preset, Auto EQ, and band changes appear on the phone. Do not
+  replace a curve under the user's finger; fetch the PC's final curve when the drag ends.
 - **Reset** = `Flat`. **Auto EQ** is a switch mirroring the PC's setting; the *learning
   memory* is intentionally not clearable from the phone (destructive + invisible).
 - **Speed lives here too** (user's answer #5 → assistant's call: in, and at the bottom of
@@ -515,13 +519,22 @@ and the Speed line** to the phone (Speed is right below); Picture and Aspect sta
 - **The PC downloads and applies.** The phone only asks and watches. Tapping *Download*
   is `saveAndLoad`: the file lands beside the media with SALU's own naming rule and is
   loaded immediately — the subtitle is on screen before your thumb leaves the phone.
-- **Tapping a track row** = `selectSubTrack`; `off` = `SubtitleTrack.no()`.
+- **Tapping a track row** = `selectSubTrack`; `off` = `SubtitleTrack.no()`. While
+  Subtitles is open, refresh the PC's full track surface so its selected track and delay
+  changes also appear on the phone; refresh immediately after a phone-side selection.
+- **Track names and list height:** prefer the PC's human-readable language/name fields
+  (for example English, Hindi, Spanish, or Mandarin), rather than repeating a generic
+  `Track` label. Keep the list to five visible rows, scroll inside it when longer, and
+  bring the selected embedded track (or `off`) into view automatically.
 - **Sync** mirrors `PlayerService.subDelay` (0.1 s steps, hold to repeat, `Reset` = 0).
   This is the feature people reach for most often during a bad subtitle file.
 - **Add a subtitle file** opens the Files browser in **subtitle mode** — same screen, same
   rules, but listing only `.srt/.ass/.sub/.vtt` and returning a path instead of playing it.
   One browser, two jobs; no second picker to build.
 - **Auto-download on play** is a switch over the PC's existing setting.
+- The Download action is enabled only when a fresh PC snapshot reports a configured key,
+  signed-in engine, and no quota pause. Keep the best three results returned by the PC;
+  the PC performs `saveAndLoad`, placing the subtitle beside the media and loading it.
 
 ### 6.3 Audio
 
@@ -534,6 +547,10 @@ A humble list, included because multi-track files are common and this is one scr
 │ │ ○ Hindi · 2.0 AAC    │ │ ← tap = switch (no confirmation)
 │ └──────────────────────┘ │
 ```
+
+The Audio pane mirrors the PC's selected track while open. Use the same five-row inner
+viewport and selected-track auto-scroll as Subtitles; show the PC's language/name instead
+of a generic track label when it is available.
 
 ---
 

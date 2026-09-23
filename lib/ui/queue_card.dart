@@ -42,8 +42,8 @@ import 'widgets.dart';
 /// - A search flattens the list whatever the mode is (PC §10.3) — the
 ///   grouping is suspended, not forgotten.
 /// - Favourites are chosen on this phone (titles only — the phone never
-///   holds URLs or m3u metadata) and thin the rows when the header
-///   bookmark is on, exactly like the PC's favourites-only filter.
+///   holds URLs or m3u metadata). Favourites-only shows bookmarked channels
+///   as a flat list, without group heads or collapsed-group hiding.
 class QueueCard extends StatefulWidget {
   const QueueCard({super.key, required this.snapshot});
 
@@ -92,6 +92,14 @@ class _QueueCardState extends State<QueueCard> {
   /// Bumped by every fetch, so a late reply from an older fetch can never
   /// overwrite a newer one.
   int _fetchGeneration = 0;
+
+  /// A successful row tap may arrive before its state snapshot. This temporary
+  /// index keeps that tap responsive; any newer snapshot index clears it.
+  int? _optimisticQueueIndex;
+  int _jumpGeneration = 0;
+
+  int get _currentQueueIndex =>
+      _optimisticQueueIndex ?? widget.snapshot.queue.index;
 
   // ── grouping ───────────────────────────────────────────────────────────────
   // null = unknown yet (haven't probed the PC), true = supported, false = old
@@ -183,13 +191,21 @@ class _QueueCardState extends State<QueueCard> {
     final List<QueueGroupingMode> newAvailable = queue.grouping.available;
     final bool modeChanged = newMode != _currentMode;
     final bool availChanged = !_listEquals(newAvailable, _availableModes);
+    final bool indexChanged = queue.index != old.index;
+    if (indexChanged) {
+      // The newer snapshot supersedes any temporary queue-jump highlight.
+      _optimisticQueueIndex = null;
+    }
 
     if (queue.count != old.count || queue.kind != old.kind) {
+      // Invalidate row jumps from the previous playlist as well as its marker.
+      _jumpGeneration++;
       // The playlist itself changed (tracks added, queue cleared, a new
       // channel load): refetch. A channel load starts blank (the PC's
       // `_onLoadGeneration`) — no search, no favourites filter, accordion
       // closed — and the old heads belong to the old list either way.
       setState(() {
+        _optimisticQueueIndex = null;
         if (modeChanged) _currentMode = newMode;
         if (availChanged) _availableModes = newAvailable;
         if (queue.isChannels) {
@@ -226,9 +242,9 @@ class _QueueCardState extends State<QueueCard> {
       }
     } else if (queue.index != old.index) {
       // Only the track moved. The whole list is already here, so this is
-      // pure local work — open the destination group when the playing
-      // channel sits in another one (the PC's `_revealOnChannelIndex`),
-      // then bring the new row into view, no network (§8).
+      // pure local work — the snapshot index drives the single playing-row
+      // marker (never the queue_get `now` hint, which may now be stale),
+      // open the destination group, then bring the new row into view.
       _openPlayingGroup();
       SchedulerBinding.instance.addPostFrameCallback((_) => _scrollToCurrent());
     }
@@ -514,28 +530,8 @@ class _QueueCardState extends State<QueueCard> {
     );
   }
 
-  int _findCurrentDisplayIndex(List<QueueDisplayItem> display) {
-    final int queueIndex = widget.snapshot.queue.index;
-    // Prefer the row marked `now`, fallback to queue.index.
-    for (int i = 0; i < display.length; i++) {
-      final QueueDisplayItem item = display[i];
-      if (item.isRow && item.row!.now) return i;
-    }
-    for (int i = 0; i < display.length; i++) {
-      final QueueDisplayItem item = display[i];
-      if (item.isRow && item.row!.index == queueIndex) return i;
-    }
-    // The playing channel hides inside a collapsed group — scroll to its
-    // head instead (the PC's reveal target rule).
-    for (int i = 0; i < display.length; i++) {
-      final QueueDisplayItem item = display[i];
-      if (item.isGroup) {
-        final QueueGroup g = item.group!;
-        if (queueIndex >= g.start && queueIndex < g.start + g.count) return i;
-      }
-    }
-    return -1;
-  }
+  int _findCurrentDisplayIndex(List<QueueDisplayItem> display) =>
+      findQueueCurrentDisplayIndex(display, _currentQueueIndex);
 
   void _scrollToCurrent() {
     if (!mounted || !_scroll.hasClients) return;
@@ -558,29 +554,26 @@ class _QueueCardState extends State<QueueCard> {
   }
 
   Future<void> _jump(QueueRow row) async {
+    final int indexWhenSent = widget.snapshot.queue.index;
+    final int generation = ++_jumpGeneration;
     final RemoteReply reply =
         await runRemote(context, () => _client.queueJump(row.index));
-    if (reply.ok && mounted) {
-      // The PC catches up in the next snapshot; mark the row now so the
-      // thumb is not left waiting for it (`remote_apk_ui.md` §8).
-      // A zap also opens the destination group (the PC's reveal rule).
-      final String? dest = groupKeyForIndex(_groups, row.index);
-      setState(() {
-        if (dest != null &&
-            _currentMode != QueueGroupingMode.flat &&
-            widget.snapshot.queue.isChannels) {
-          _openGroupKey = dest;
-        }
-        _rows = _rows
-            .map((QueueRow r) => QueueRow(
-                  index: r.index,
-                  title: r.title,
-                  durationMs: r.durationMs,
-                  now: r.index == row.index,
-                ))
-            .toList();
-      });
-    }
+    if (!reply.ok || !mounted || generation != _jumpGeneration) return;
+
+    // Keep the tapped row responsive while its snapshot is on the way, but do
+    // not let a late reply overwrite a newer playback position.
+    final int snapshotIndex = widget.snapshot.queue.index;
+    if (snapshotIndex != indexWhenSent && snapshotIndex != row.index) return;
+
+    final String? dest = groupKeyForIndex(_groups, row.index);
+    setState(() {
+      _optimisticQueueIndex = row.index;
+      if (dest != null &&
+          _currentMode != QueueGroupingMode.flat &&
+          widget.snapshot.queue.isChannels) {
+        _openGroupKey = dest;
+      }
+    });
   }
 
   /// The playlist's clear button (user, 2026-09-22). Destructive, so it asks
@@ -614,7 +607,9 @@ class _QueueCardState extends State<QueueCard> {
       // the card steps out of the page on its own.
       _fetchGeneration++; // Any in-flight fetch is now stale.
       _groupsGeneration++; // Groups are stale too.
+      _jumpGeneration++; // A pending row jump belongs to the cleared playlist.
       setState(() {
+        _optimisticQueueIndex = null;
         _rows = const <QueueRow>[];
         _groups = const <QueueGroup>[];
         _openGroupKey = null;
@@ -661,16 +656,17 @@ class _QueueCardState extends State<QueueCard> {
     // arrive the list waits instead of flashing every channel (the PC
     // computes its heads synchronously — the phone waits one round-trip
     // rather than showing an "everything expanded" moment that the PC
-    // never has). A search still flattens immediately: it needs no heads.
+    // never has). Search and favourites both flatten immediately: neither
+    // needs group heads.
     final bool awaitingHeads = _currentMode != QueueGroupingMode.flat &&
         queue.isChannels &&
         _groupingSupported != false &&
         _groups.isEmpty &&
-        _query.isEmpty;
+        _query.isEmpty &&
+        !_favOnly;
 
-    // The header mirrors the PC panel's header: the search bar sits beside
-    // Queue with its count and its clear button inside it, and the
-    // favourites bookmark sits beside the clear button (channels only).
+    // The total belongs only inside the search bar; the header stays compact.
+    // The favourites bookmark sits beside the clear button (channels only).
     return SaluCard(
       padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
       child: Column(
@@ -699,23 +695,12 @@ class _QueueCardState extends State<QueueCard> {
                         'Queue',
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
-                      const SizedBox(width: 6),
-                      // The total count lives here beside Queue — named
-                      // "channels" on a channel list so the total channel
-                      // count is unmistakable — and again inside the
-                      // search bar (`14`, or `9 / 14` while filtered).
-                      Text(
-                        queue.isChannels
-                            ? '${queue.count} ${queue.count == 1 ? 'channel' : 'channels'}'
-                            : '${queue.count} ${queue.count == 1 ? 'item' : 'items'}',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
                     ],
                   ),
                 ),
               ),
               const SizedBox(width: 8),
-              Expanded(child: _searchField(shown)),
+              Expanded(child: _searchField(shown, total: queue.count)),
               if (queue.isChannels)
                 IconButton(
                   iconSize: 20,
@@ -834,13 +819,21 @@ class _QueueCardState extends State<QueueCard> {
   /// magnifier names it — no placeholder text — the count lives inside it
   /// (`14`, or `9 / 14` while a filter thins the list), and the ✕ clears
   /// the text — only while there is some.
-  Widget _searchField(int shown) {
-    final int total = _rows.length;
+  Widget _searchField(int shown, {required int total}) {
     // `_favOnly` is channels-only (the header bookmark hides on file
-    // queues), so it counts as filtering only there.
+    // queues), so it counts as filtering only there. Use the snapshot total
+    // so the count remains correct while queue rows are loading.
     final bool filtering =
         _query.isNotEmpty || (_favOnly && widget.snapshot.queue.isChannels);
-    final bool noMatch = filtering && shown == 0;
+    final bool noMatch = filtering && shown == 0 && !_loading;
+    final String countLabel;
+    if (!filtering) {
+      countLabel = '$total';
+    } else if (_loading) {
+      countLabel = '… / $total';
+    } else {
+      countLabel = '$shown / $total';
+    }
     return Container(
       height: 34,
       padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -870,10 +863,15 @@ class _QueueCardState extends State<QueueCard> {
                 color: AppColors.textPrimary,
                 fontSize: 13,
               ),
-              cursorColor: AppColors.textPrimary,
+              cursorColor: AppColors.accent,
               decoration: const InputDecoration(
                 isDense: true,
+                filled: false,
+                fillColor: Colors.transparent,
                 border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                disabledBorder: InputBorder.none,
                 contentPadding: EdgeInsets.symmetric(vertical: 6),
               ),
               onChanged: (String value) {
@@ -897,7 +895,7 @@ class _QueueCardState extends State<QueueCard> {
             ),
           ),
           Text(
-            filtering ? '$shown / $total' : '$total',
+            countLabel,
             style: const TextStyle(
               color: Color(0xFF7C7C80),
               fontSize: 10,
@@ -1002,7 +1000,7 @@ class _QueueCardState extends State<QueueCard> {
   /// The head holding the playing channel keeps the accent twist.
   Widget _groupHeader(BuildContext context, QueueGroup group) {
     final bool open = group.key == _openGroupKey;
-    final int currentIndex = widget.snapshot.queue.index;
+    final int currentIndex = _currentQueueIndex;
     final bool containsNow =
         currentIndex >= group.start && currentIndex < group.start + group.count;
     return Tooltip(
@@ -1063,7 +1061,7 @@ class _QueueCardState extends State<QueueCard> {
   }
 
   Widget _row(BuildContext context, QueueRow row) {
-    final bool now = row.now || row.index == widget.snapshot.queue.index;
+    final bool now = isCurrentQueueRow(row, _currentQueueIndex);
     // Channels carry the PC's bookmark: saved = solid accent, always
     // visible; unsaved = dim outline (the phone has no hover to fade it
     // in on, so it stays put). File rows have neither.

@@ -45,24 +45,45 @@ class _SubsSearchScreenState extends State<SubsSearchScreen> {
   String? _searchError;
   int? _downloadingFileId;
   int _loadedFileId = -1;
-
-  SubtitleEngine get _engine => widget.snapshot.subs.engine;
+  late SubtitleEngine _engine;
 
   @override
   void initState() {
     super.initState();
     _query = TextEditingController(text: widget.initialQuery);
     _lang = TextEditingController(text: widget.initialLang);
+    _engine = _client.snapshot.value?.subs.engine ?? widget.snapshot.subs.engine;
+    _client.snapshot.addListener(_onSnapshot);
+    // Ask the PC for a fresh engine/sign-in/quota snapshot when this route opens.
+    unawaited(_client.stateGet());
+  }
+
+  @override
+  void didUpdateWidget(SubsSearchScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _engine = _client.snapshot.value?.subs.engine ?? widget.snapshot.subs.engine;
   }
 
   @override
   void dispose() {
+    _client.snapshot.removeListener(_onSnapshot);
     _query.dispose();
     _lang.dispose();
     super.dispose();
   }
 
-  bool get _canDownload => _engine.signedIn && !_engine.quotaPaused;
+  void _onSnapshot() {
+    final SubtitleEngine? next = _client.snapshot.value?.subs.engine;
+    if (next == null ||
+        (next.key == _engine.key &&
+            next.signedIn == _engine.signedIn &&
+            next.quotaPaused == _engine.quotaPaused)) {
+      return;
+    }
+    setState(() => _engine = next);
+  }
+
+  bool get _canDownload => _engine.ready;
 
   Future<void> _search() async {
     final String query = _query.text.trim();
@@ -77,10 +98,12 @@ class _SubsSearchScreenState extends State<SubsSearchScreen> {
     if (!mounted) return;
     if (reply.ok) {
       final Object? raw = reply['results'] ?? reply['rows'];
+      // Keep the PC's top-three order; do not re-rank its search results.
       final List<SubtitleRow> rows = raw is List
           ? raw
               .whereType<Map>()
               .map((Map m) => SubtitleRow.from(m.cast<String, Object?>()))
+              .take(3)
               .toList()
           : const <SubtitleRow>[];
       setState(() {
@@ -108,7 +131,7 @@ class _SubsSearchScreenState extends State<SubsSearchScreen> {
       widget.onLoaded?.call();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Loaded — it is on the PC screen now.')),
+          const SnackBar(content: Text('Saved beside the video and loaded on the PC.')),
         );
       }
     }

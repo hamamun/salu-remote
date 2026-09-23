@@ -16,12 +16,10 @@ import 'models.dart';
 ///   * **A search flattens the list** whatever the mode is (PC §10.3): the
 ///     grouping is suspended, not forgotten — clear the search and the
 ///     accordion is back.
-///   * **Favourites-only** thins the rows to bookmarks. Two honest
-///     divergences from the PC, both forced by the privacy rule: the key is
-///     the title (the same last-resort key the PC's own
-///     `ChannelFavouritesService.channelKey` falls back to), and heads stay
-///     put while their rows thin out — the phone cannot recompute groups,
-///     so empty groups cannot vanish the way they do on the PC.
+///   * **Favourites-only** shows only bookmarked channel rows, in a flat list
+///     with no group heads. This also makes favourites in collapsed groups
+///     visible. The phone keys favourites by title (the same last-resort key
+///     the PC's own `ChannelFavouritesService.channelKey` falls back to).
 ///
 /// Rows and groups arrive in separate calls and can disagree for a moment
 /// (a fetch racing a queue edit). A row no head owns is an **orphan**: it is
@@ -74,8 +72,9 @@ List<QueueDisplayItem> buildQueueDisplay({
   // showing bare heads for an empty queue would read as a broken load.
   if (sorted.isEmpty) return const <QueueDisplayItem>[];
 
-  // Flat — or a search, which flattens whatever the mode is.
-  if (!grouped || searching) {
+  // Flat, searching, or favourites-only — searches and favourites both
+  // flatten grouped modes so a collapsed group cannot hide a matching row.
+  if (!grouped || searching || favouritesOnly) {
     return <QueueDisplayItem>[
       for (final QueueRow row in sorted)
         if (visible(row)) QueueDisplayItem.row(row),
@@ -120,6 +119,37 @@ List<QueueDisplayItem> buildQueueDisplay({
     if (visible(row)) out.add(QueueDisplayItem.row(row));
   }
   return out;
+}
+
+/// Whether [row] is the current queue row. The snapshot's [queueIndex] is
+/// authoritative; `queue_get`'s per-row `now` flag can be stale after the
+/// queue was fetched, so it must not drive live highlighting.
+bool isCurrentQueueRow(QueueRow row, int queueIndex) =>
+    queueIndex >= 0 && row.index == queueIndex;
+
+/// Finds the displayed position for the snapshot's current queue index.
+/// If the row is hidden inside a collapsed group, returns that group's head;
+/// stale `QueueRow.now` flags are deliberately ignored.
+int findQueueCurrentDisplayIndex(
+  List<QueueDisplayItem> display,
+  int queueIndex,
+) {
+  for (int i = 0; i < display.length; i++) {
+    final QueueDisplayItem item = display[i];
+    if (item.isRow && isCurrentQueueRow(item.row!, queueIndex)) return i;
+  }
+
+  final List<QueueGroup> displayedGroups = <QueueGroup>[
+    for (final QueueDisplayItem item in display)
+      if (item.isGroup) item.group!,
+  ];
+  final String? key = groupKeyForIndex(displayedGroups, queueIndex);
+  if (key == null) return -1;
+  for (int i = 0; i < display.length; i++) {
+    final QueueDisplayItem item = display[i];
+    if (item.isGroup && item.group!.key == key) return i;
+  }
+  return -1;
 }
 
 /// The key of the group holding queue [index] — what selecting a grouped

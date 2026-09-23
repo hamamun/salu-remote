@@ -48,42 +48,114 @@ class _EqualizerPaneState extends State<EqualizerPane> {
   TuneInfo? _info;
   List<double> _gains = List<double>.filled(TuneInfo.bandCount, 0);
   int? _draggingBand;
+  bool _requestInFlight = false;
+  bool _reloadPending = false;
   String? _error;
+  Timer? _refreshTimer;
 
   @override
   void initState() {
     super.initState();
     widget.activeTab.addListener(_onActive);
+    if (widget.activeTab.value == widget.myIndex) _startPolling();
     unawaited(_load());
+  }
+
+  @override
+  void didUpdateWidget(EqualizerPane oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.activeTab != widget.activeTab) {
+      oldWidget.activeTab.removeListener(_onActive);
+      widget.activeTab.addListener(_onActive);
+      _syncPolling();
+    }
+
+    final SaluSnapshot old = oldWidget.snapshot;
+    final SaluSnapshot current = widget.snapshot;
+    if (old.playback.title != current.playback.title ||
+        old.tune.kind != current.tune.kind ||
+        old.tune.preset != current.tune.preset ||
+        old.tune.custom != current.tune.custom ||
+        old.tune.autoEq != current.tune.autoEq ||
+        old.tune.speed != current.tune.speed) {
+      unawaited(_load());
+    }
   }
 
   @override
   void dispose() {
     widget.activeTab.removeListener(_onActive);
+    _refreshTimer?.cancel();
     super.dispose();
   }
 
   void _onActive() {
-    // Coming back to the tab: the curve may have changed on the PC.
-    if (widget.activeTab.value == widget.myIndex) unawaited(_load());
+    if (widget.activeTab.value == widget.myIndex) {
+      // Coming back to Tune: the curve may have changed on the PC.
+      unawaited(_load());
+      _startPolling();
+    } else {
+      _stopPolling();
+    }
+  }
+
+  void _syncPolling() {
+    if (widget.activeTab.value == widget.myIndex) {
+      _startPolling();
+    } else {
+      _stopPolling();
+    }
+  }
+
+  void _startPolling() {
+    _refreshTimer ??= Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => unawaited(_load()),
+    );
+  }
+
+  void _stopPolling() {
+    _refreshTimer?.cancel();
+    _refreshTimer = null;
   }
 
   Future<void> _load() async {
-    setState(() {
-      _error = null;
-    });
-    final RemoteReply reply = await _client.tuneGet();
-    if (!mounted) return;
-    if (reply.ok) {
-      final TuneInfo info = TuneInfo.from(reply.data);
-      setState(() {
-        _info = info;
-        _gains = info.curve;
-      });
-    } else {
-      setState(() {
-        _error = reply.message;
-      });
+    // Never replace a curve while a finger is moving a band. The drag's final
+    // eq_set is fetched immediately after its gesture ends.
+    if (_draggingBand != null) {
+      _reloadPending = true;
+      return;
+    }
+    if (_requestInFlight) {
+      _reloadPending = true;
+      return;
+    }
+    _requestInFlight = true;
+    _reloadPending = false;
+    if (mounted) setState(() => _error = null);
+
+    try {
+      final RemoteReply reply = await _client.tuneGet();
+      if (!mounted) return;
+      if (reply.ok) {
+        final TuneInfo info = TuneInfo.from(reply.data);
+        setState(() {
+          _info = info;
+          if (_draggingBand == null) {
+            _gains = info.curve;
+          } else {
+            _reloadPending = true;
+          }
+        });
+      } else {
+        setState(() => _error = reply.message);
+      }
+    } finally {
+      _requestInFlight = false;
+      if (mounted && _reloadPending && _draggingBand == null) {
+        _reloadPending = false;
+        unawaited(_load());
+      }
     }
   }
 
@@ -106,9 +178,14 @@ class _EqualizerPaneState extends State<EqualizerPane> {
 
   Future<void> _bandEnd() async {
     if (_draggingBand == null) return;
-    _draggingBand = null;
-    await _client.eqSet(_gains);
-    await _client.eqGesture('end');
+    final List<double> finalGains = List<double>.of(_gains);
+    try {
+      await _client.eqSet(finalGains);
+      await _client.eqGesture('end');
+    } finally {
+      _draggingBand = null;
+    }
+    await _load();
   }
 
   // ── discrete actions ─────────────────────────────────────────────────────

@@ -6,6 +6,8 @@ import 'package:flutter/scheduler.dart';
 import '../core/client.dart';
 import '../core/error_copy.dart';
 import '../core/models.dart';
+import '../core/prefs.dart';
+import '../core/queue_view.dart';
 import '../core/reply.dart';
 import 'theme.dart';
 import 'widgets.dart';
@@ -22,12 +24,23 @@ import 'widgets.dart';
 /// the snapshot's `queue.index`, so the phone never computes playback order
 /// itself.
 ///
+/// The header mirrors the PC panel's header (Salu
+/// `lib/ui/panels/playlist_panel.dart`): the search bar sits beside Queue
+/// with its count and its clear button inside it, and the favourites
+/// bookmark sits beside the clear button (channels only).
+///
 /// Channel grouping (`pc_part.md` §11):
 /// - `queue.grouping` from snapshot: available modes + current mode.
 /// - Chips row above the list: Flat / Category / Country / Language.
 /// - `queue_groups` + `queue_group_set` behind the `unknown_command` hide.
-/// - Group header rows inserted inside the queue list; tapping a group
-///   jumps to its first channel via existing `queue_jump`.
+/// - Grouped modes are the PC's accordion: every head paints, but only the
+///   open group's channels do (autohide) — a head tap toggles, it never
+///   plays, and the group holding the playing channel opens on its own.
+/// - A search flattens the list whatever the mode is (PC §10.3) — the
+///   grouping is suspended, not forgotten.
+/// - Favourites are chosen on this phone (titles only — the phone never
+///   holds URLs or m3u metadata) and thin the rows when the header
+///   bookmark is on, exactly like the PC's favourites-only filter.
 class QueueCard extends StatefulWidget {
   const QueueCard({super.key, required this.snapshot});
 
@@ -35,17 +48,6 @@ class QueueCard extends StatefulWidget {
 
   @override
   State<QueueCard> createState() => _QueueCardState();
-}
-
-class _DisplayItem {
-  const _DisplayItem.group(this.group) : row = null;
-  const _DisplayItem.row(this.row) : group = null;
-
-  final QueueGroup? group;
-  final QueueRow? row;
-
-  bool get isGroup => group != null;
-  bool get isRow => row != null;
 }
 
 class _QueueCardState extends State<QueueCard> {
@@ -62,9 +64,27 @@ class _QueueCardState extends State<QueueCard> {
 
   final SaluClient _client = SaluClient.instance;
   final ScrollController _scroll = ScrollController();
+  final TextEditingController _searchCtl = TextEditingController();
   List<QueueRow> _rows = const <QueueRow>[];
   bool _loading = false;
   String? _error;
+
+  /// Collapsed/expanded, remembered per section (`remote_apk_ui.md` §3).
+  late bool _expanded;
+
+  /// The search bar's trimmed query. Filters rows by title; while
+  /// non-empty the grouping is suspended and the list is flat (PC §10.3).
+  String _query = '';
+
+  /// Favourites-only filter (the header bookmark, channels only) + the
+  /// favourite titles themselves, persisted on this phone.
+  bool _favOnly = false;
+  Set<String> _favs = const <String>{};
+
+  /// The accordion's one open head (its stable PC key), or null while
+  /// every group is collapsed. A head tap toggles it; a mode choice and a
+  /// track change open the group holding the playing channel.
+  String? _openGroupKey;
 
   /// Bumped by every fetch, so a late reply from an older fetch can never
   /// overwrite a newer one.
@@ -134,6 +154,8 @@ class _QueueCardState extends State<QueueCard> {
     super.initState();
     _currentMode = widget.snapshot.queue.grouping.mode;
     _availableModes = widget.snapshot.queue.grouping.available;
+    _expanded = !RemotePrefs.instance.isCollapsed('queue');
+    _favs = RemotePrefs.instance.channelFavourites;
     // First paint scrolls straight to the now-playing row: with the whole
     // queue in the list, "5 visible rows" must be the *right* 5.
     unawaited(_fetch(autoscroll: true));
@@ -142,6 +164,7 @@ class _QueueCardState extends State<QueueCard> {
   @override
   void dispose() {
     _scroll.dispose();
+    _searchCtl.dispose();
     super.dispose();
   }
 
@@ -157,37 +180,53 @@ class _QueueCardState extends State<QueueCard> {
     final List<QueueGroupingMode> newAvailable = queue.grouping.available;
     final bool modeChanged = newMode != _currentMode;
     final bool availChanged = !_listEquals(newAvailable, _availableModes);
-    final bool groupingChanged = modeChanged || availChanged;
 
-    if (modeChanged) _currentMode = newMode;
-    if (availChanged) _availableModes = newAvailable;
-
-    if (queue.count != old.count) {
-      // The playlist itself changed (tracks added, queue cleared): refetch.
+    if (queue.count != old.count || queue.kind != old.kind) {
+      // The playlist itself changed (tracks added, queue cleared, a new
+      // channel load): refetch. A channel load starts blank (the PC's
+      // `_onLoadGeneration`) — no search, no favourites filter, accordion
+      // closed — and the old heads belong to the old list either way.
+      setState(() {
+        if (modeChanged) _currentMode = newMode;
+        if (availChanged) _availableModes = newAvailable;
+        if (queue.isChannels) {
+          _searchCtl.clear();
+          _query = '';
+          _favOnly = false;
+        }
+        _groups = const <QueueGroup>[];
+        _groupsLoading = false;
+        _groupsError = null;
+        _openGroupKey = null;
+      });
       unawaited(_fetch(autoscroll: true));
-    } else if (groupingChanged) {
+    } else if (modeChanged || availChanged) {
       if (modeChanged) {
-        // Mode flipped — need new groups, and the list layout changed.
-        if (_currentMode == QueueGroupingMode.flat) {
-          if (mounted) {
-            setState(() {
-              _groups = const <QueueGroup>[];
-              _groupsLoading = false;
-              _groupsError = null;
-            });
-          }
-        } else {
+        // Mode flipped — the old heads belong to the old mode. The fetch
+        // below re-opens the group holding the playing channel.
+        setState(() {
+          _currentMode = newMode;
+          _availableModes = newAvailable;
+          _groups = const <QueueGroup>[];
+          _groupsError = null;
+          _openGroupKey = null;
+          _groupsLoading = newMode != QueueGroupingMode.flat;
+        });
+        if (newMode != QueueGroupingMode.flat) {
           unawaited(_fetchGroups());
         }
         SchedulerBinding.instance
             .addPostFrameCallback((_) => _scrollToCurrent());
-      } else {
+      } else if (mounted) {
         // Availability only — chips need rebuild.
-        if (mounted) setState(() {});
+        setState(() => _availableModes = newAvailable);
       }
     } else if (queue.index != old.index) {
       // Only the track moved. The whole list is already here, so this is
-      // pure local work — bring the new row into view, no network (§8).
+      // pure local work — open the destination group when the playing
+      // channel sits in another one (the PC's `_revealOnChannelIndex`),
+      // then bring the new row into view, no network (§8).
+      _openPlayingGroup();
       SchedulerBinding.instance.addPostFrameCallback((_) => _scrollToCurrent());
     }
   }
@@ -314,11 +353,17 @@ class _QueueCardState extends State<QueueCard> {
     if (reply.ok) {
       // Old PCs answer `unknown_command` → hide chips row entirely.
       final QueueGroupsResult result = QueueGroupsResult.from(reply.data);
+      // Fresh heads open the group holding the playing channel (the PC's
+      // `_chooseMode` rule) — a head the phone never had to ask for.
+      final String? autoOpen = _currentMode == QueueGroupingMode.flat
+          ? null
+          : groupKeyForIndex(result.groups, widget.snapshot.queue.index);
       setState(() {
         _groups = result.groups;
         _groupsLoading = false;
         _groupingSupported = true;
         _groupsError = null;
+        _openGroupKey = autoOpen;
       });
       SchedulerBinding.instance.addPostFrameCallback((_) => _scrollToCurrent());
       return;
@@ -354,17 +399,15 @@ class _QueueCardState extends State<QueueCard> {
       return;
     }
     final QueueGroupingMode previous = _currentMode;
-    // Optimistic local update so the chip lights instantly.
+    // Optimistic local update so the chip lights instantly. The old heads
+    // belong to the old mode, so the list falls back to flat rows until
+    // the new heads arrive — never wrong-mode heads.
     setState(() {
       _currentMode = mode;
-      if (mode == QueueGroupingMode.flat) {
-        _groups = const <QueueGroup>[];
-        _groupsLoading = false;
-        _groupsError = null;
-      } else {
-        _groupsLoading = true;
-        _groupsError = null;
-      }
+      _groups = const <QueueGroup>[];
+      _openGroupKey = null;
+      _groupsError = null;
+      _groupsLoading = mode != QueueGroupingMode.flat;
     });
 
     final RemoteReply reply = await _client.queueGroupSet(_modeWire(mode));
@@ -390,11 +433,13 @@ class _QueueCardState extends State<QueueCard> {
       return;
     }
 
-    // Failure — revert and show why.
+    // Failure — revert and show why. The previous mode's heads were
+    // cleared above, so they are fetched back.
     setState(() {
       _currentMode = previous;
       _groupsLoading = false;
     });
+    if (previous != QueueGroupingMode.flat) unawaited(_fetchGroups());
     if (context.mounted && !RemoteErrorCopy.isSilent(reply.code)) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(RemoteErrorCopy.text(reply.code, reply.message))),
@@ -402,78 +447,85 @@ class _QueueCardState extends State<QueueCard> {
     }
   }
 
-  List<_DisplayItem> _buildDisplayItems() {
-    if (_rows.isEmpty) return const <_DisplayItem>[];
-
-    // Flat mode or no groups or unsupported or not a channel list → plain rows.
-    if (_currentMode == QueueGroupingMode.flat ||
-        _groupingSupported == false ||
-        !widget.snapshot.queue.isChannels ||
-        _groups.isEmpty) {
-      return _rows.map((QueueRow r) => _DisplayItem.row(r)).toList();
+  /// Opens the accordion group holding the playing channel (the PC's
+  /// `_chooseMode` / `_revealOnChannelIndex` rule). A no-op in Flat and
+  /// while the heads are still loading.
+  void _openPlayingGroup() {
+    if (_currentMode == QueueGroupingMode.flat) return;
+    if (!widget.snapshot.queue.isChannels) return;
+    final String? key = groupKeyForIndex(_groups, widget.snapshot.queue.index);
+    if (key != null && key != _openGroupKey && mounted) {
+      setState(() => _openGroupKey = key);
     }
-
-    // Grouped: merge groups + rows.
-    final List<QueueRow> sortedRows = List<QueueRow>.from(_rows)
-      ..sort((QueueRow a, QueueRow b) => a.index.compareTo(b.index));
-    final List<QueueGroup> sortedGroups = List<QueueGroup>.from(_groups)
-      ..sort((QueueGroup a, QueueGroup b) => a.start.compareTo(b.start));
-
-    final List<_DisplayItem> out = <_DisplayItem>[];
-    int rowPtr = 0;
-
-    for (int gIdx = 0; gIdx < sortedGroups.length; gIdx++) {
-      final QueueGroup group = sortedGroups[gIdx];
-      final int nextStart = gIdx + 1 < sortedGroups.length
-          ? sortedGroups[gIdx + 1].start
-          : 1 << 30;
-      int groupEnd = group.start + group.count;
-      if (groupEnd > nextStart) groupEnd = nextStart;
-
-      // Orphan rows before this group's start (shouldn't happen in grouped
-      // mode, but keep them rather than dropping).
-      while (rowPtr < sortedRows.length &&
-          sortedRows[rowPtr].index < group.start) {
-        out.add(_DisplayItem.row(sortedRows[rowPtr]));
-        rowPtr++;
-      }
-
-      // Group header.
-      out.add(_DisplayItem.group(group));
-
-      // Rows belonging to this group.
-      while (rowPtr < sortedRows.length &&
-          sortedRows[rowPtr].index < groupEnd) {
-        if (sortedRows[rowPtr].index >= group.start) {
-          out.add(_DisplayItem.row(sortedRows[rowPtr]));
-        }
-        rowPtr++;
-      }
-    }
-
-    // Any remaining rows after last group.
-    while (rowPtr < sortedRows.length) {
-      out.add(_DisplayItem.row(sortedRows[rowPtr]));
-      rowPtr++;
-    }
-
-    return out;
   }
 
-  int _findCurrentDisplayIndex(List<_DisplayItem> display) {
+  /// A head tap toggles the accordion — it never plays (PC §10.5). The
+  /// now-hidden channels come back on the next tap, and the playing
+  /// channel's group re-opens on its own at the next track change.
+  void _toggleGroup(QueueGroup group) {
+    setState(
+      () => _openGroupKey = _openGroupKey == group.key ? null : group.key,
+    );
+  }
+
+  void _toggleExpanded() {
+    setState(() => _expanded = !_expanded);
+    unawaited(RemotePrefs.instance.setCollapsed('queue', !_expanded));
+  }
+
+  void _clearSearch() {
+    _searchCtl.clear();
+    setState(() => _query = '');
+    // The accordion is back — bring the playing row into view.
+    SchedulerBinding.instance.addPostFrameCallback((_) => _scrollToCurrent());
+  }
+
+  /// Saves or unsaves a channel as a favourite of this phone. Titles only —
+  /// the phone never holds the stable channel keys the PC uses, so the
+  /// title is the key (the PC's own last resort).
+  void _toggleFav(String title) {
+    final Set<String> next = Set<String>.of(_favs);
+    if (!next.remove(title)) next.add(title);
+    setState(() => _favs = Set<String>.unmodifiable(next));
+    unawaited(RemotePrefs.instance.setChannelFavourites(next));
+  }
+
+  List<QueueDisplayItem> _buildDisplayItems() {
+    if (_rows.isEmpty) return const <QueueDisplayItem>[];
+
+    // The accordion applies only in a grouped mode on a channel list whose
+    // PC answered `queue_groups` — while the heads load, the list stays
+    // flat rows rather than wrong-mode heads.
+    final bool grouped = _currentMode != QueueGroupingMode.flat &&
+        _groupingSupported != false &&
+        widget.snapshot.queue.isChannels &&
+        _groups.isNotEmpty;
+    return buildQueueDisplay(
+      rows: _rows,
+      groups: _groups,
+      grouped: grouped,
+      openGroupKey: _openGroupKey,
+      query: _query,
+      favouritesOnly: _favOnly && widget.snapshot.queue.isChannels,
+      favourites: _favs,
+    );
+  }
+
+  int _findCurrentDisplayIndex(List<QueueDisplayItem> display) {
     final int queueIndex = widget.snapshot.queue.index;
     // Prefer the row marked `now`, fallback to queue.index.
     for (int i = 0; i < display.length; i++) {
-      final _DisplayItem item = display[i];
+      final QueueDisplayItem item = display[i];
       if (item.isRow && item.row!.now) return i;
     }
     for (int i = 0; i < display.length; i++) {
-      final _DisplayItem item = display[i];
+      final QueueDisplayItem item = display[i];
       if (item.isRow && item.row!.index == queueIndex) return i;
     }
-    // If still not found, try to find the group containing the current index.
+    // The playing channel hides inside a collapsed group — scroll to its
+    // head instead (the PC's reveal target rule).
     for (int i = 0; i < display.length; i++) {
-      final _DisplayItem item = display[i];
+      final QueueDisplayItem item = display[i];
       if (item.isGroup) {
         final QueueGroup g = item.group!;
         if (queueIndex >= g.start && queueIndex < g.start + g.count) return i;
@@ -485,7 +537,7 @@ class _QueueCardState extends State<QueueCard> {
   void _scrollToCurrent() {
     if (!mounted || !_scroll.hasClients) return;
     if (_rows.isEmpty) return;
-    final List<_DisplayItem> display = _buildDisplayItems();
+    final List<QueueDisplayItem> display = _buildDisplayItems();
     if (display.isEmpty) return;
     final int position = _findCurrentDisplayIndex(display);
     if (position < 0) return;
@@ -508,30 +560,20 @@ class _QueueCardState extends State<QueueCard> {
     if (reply.ok && mounted) {
       // The PC catches up in the next snapshot; mark the row now so the
       // thumb is not left waiting for it (`remote_apk_ui.md` §8).
+      // A zap also opens the destination group (the PC's reveal rule).
+      final String? dest = groupKeyForIndex(_groups, row.index);
       setState(() {
+        if (dest != null &&
+            _currentMode != QueueGroupingMode.flat &&
+            widget.snapshot.queue.isChannels) {
+          _openGroupKey = dest;
+        }
         _rows = _rows
             .map((QueueRow r) => QueueRow(
                   index: r.index,
                   title: r.title,
                   durationMs: r.durationMs,
                   now: r.index == row.index,
-                ))
-            .toList();
-      });
-    }
-  }
-
-  Future<void> _jumpGroup(QueueGroup group) async {
-    final RemoteReply reply =
-        await runRemote(context, () => _client.queueJump(group.start));
-    if (reply.ok && mounted) {
-      setState(() {
-        _rows = _rows
-            .map((QueueRow r) => QueueRow(
-                  index: r.index,
-                  title: r.title,
-                  durationMs: r.durationMs,
-                  now: r.index == group.start,
                 ))
             .toList();
       });
@@ -572,6 +614,7 @@ class _QueueCardState extends State<QueueCard> {
       setState(() {
         _rows = const <QueueRow>[];
         _groups = const <QueueGroup>[];
+        _openGroupKey = null;
       });
       return;
     }
@@ -584,94 +627,265 @@ class _QueueCardState extends State<QueueCard> {
     }
   }
 
+  String _emptyLine(SaluQueueInfo queue) {
+    if (_query.isNotEmpty) return 'No matches for "$_query".';
+    if (_favOnly && queue.isChannels) {
+      return 'No favourites yet — tap the bookmark on a channel to save it here.';
+    }
+    return 'Nothing in the queue';
+  }
+
   @override
   Widget build(BuildContext context) {
     final SaluQueueInfo queue = widget.snapshot.queue;
-    final List<_DisplayItem> display = _buildDisplayItems();
+    final List<QueueDisplayItem> display = _buildDisplayItems();
+    int shown = 0;
+    for (final QueueDisplayItem item in display) {
+      if (item.isRow) shown++;
+    }
     // Five rows at most; fewer when the queue is shorter. The +1 px per
     // separator keeps the last row from being clipped by its own divider.
-    final int shown = display.length < _visibleRows ? display.length : _visibleRows;
+    // Group heads count as rows — the window is a height, not a kind.
+    final int windowed =
+        display.length < _visibleRows ? display.length : _visibleRows;
     final double listHeight =
-        shown * _rowHeight + (shown > 1 ? shown - 1 : 0).toDouble();
+        windowed * _rowHeight + (windowed > 1 ? windowed - 1 : 0).toDouble();
 
     final bool showGroupingChips =
         queue.isChannels && _groupingSupported != false;
 
-    return SectionCard(
-      title: 'Queue',
-      trailing: '${queue.count} ${queue.count == 1 ? 'item' : 'items'}',
-      memoryKey: 'queue',
-      padding: const EdgeInsets.fromLTRB(8, 2, 8, 8),
-      action: IconButton(
-        iconSize: 20,
-        visualDensity: VisualDensity.compact,
-        tooltip: 'Clear playlist',
-        color: AppColors.iconIdle,
-        onPressed: queue.hasRows && !_loading ? () => unawaited(_clear()) : null,
-        icon: const Icon(Icons.playlist_remove),
-      ),
+    // The header mirrors the PC panel's header: the search bar sits beside
+    // Queue with its count and its clear button inside it, and the
+    // favourites bookmark sits beside the clear button (channels only).
+    return SaluCard(
+      padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          if (showGroupingChips) ...<Widget>[
-            _groupingChips(),
-            const SizedBox(height: 8),
-          ],
-          if (_loading)
-            const _SkeletonRows()
-          else if (_error != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Text(_error!, style: Theme.of(context).textTheme.bodySmall),
-            )
-          else if (display.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Text('Nothing in the queue',
-                  style: Theme.of(context).textTheme.bodySmall),
-            )
-          else
-            SizedBox(
-              height: listHeight,
-              child: Stack(
-                children: <Widget>[
-                  ListView.separated(
-                    controller: _scroll,
-                    itemCount: display.length,
-                    separatorBuilder: (_, _) => const Divider(height: 1),
-                    itemBuilder: (BuildContext context, int i) {
-                      final _DisplayItem item = display[i];
-                      if (item.isGroup) {
-                        return _groupHeader(context, item.group!);
-                      } else {
-                        return _row(context, item.row!);
-                      }
-                    },
+          Row(
+            children: <Widget>[
+              InkWell(
+                borderRadius: BorderRadius.circular(10),
+                onTap: _toggleExpanded,
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Icon(
+                        _expanded
+                            ? Icons.keyboard_arrow_down
+                            : Icons.keyboard_arrow_right,
+                        size: 20,
+                        color: AppColors.iconIdle,
+                      ),
+                      const SizedBox(width: 2),
+                      Text(
+                        'Queue',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '${queue.count} ${queue.count == 1 ? 'item' : 'items'}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
                   ),
-                  if (_groupsLoading)
-                    Positioned(
-                      right: 4,
-                      top: 2,
-                      child: SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: AppColors.accent,
-                        ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(child: _searchField(shown)),
+              if (queue.isChannels)
+                IconButton(
+                  iconSize: 20,
+                  visualDensity: VisualDensity.compact,
+                  tooltip: _favOnly
+                      ? 'Showing favourites — tap to show all channels'
+                      : 'Show favourites only',
+                  color: _favOnly ? AppColors.accent : AppColors.iconIdle,
+                  onPressed: () => setState(() => _favOnly = !_favOnly),
+                  icon: Icon(
+                    _favOnly ? Icons.bookmark : Icons.bookmark_border,
+                  ),
+                ),
+              IconButton(
+                iconSize: 20,
+                visualDensity: VisualDensity.compact,
+                tooltip: 'Clear playlist',
+                color: AppColors.iconIdle,
+                onPressed:
+                    queue.hasRows && !_loading ? () => unawaited(_clear()) : null,
+                icon: const Icon(Icons.playlist_remove),
+              ),
+            ],
+          ),
+          if (_expanded)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(0, 2, 0, 2),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  if (showGroupingChips) ...<Widget>[
+                    _groupingChips(),
+                    const SizedBox(height: 8),
+                  ],
+                  if (_loading)
+                    const _SkeletonRows()
+                  else if (_error != null)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text(_error!,
+                          style: Theme.of(context).textTheme.bodySmall),
+                    )
+                  else if (display.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text(_emptyLine(queue),
+                          style: Theme.of(context).textTheme.bodySmall),
+                    )
+                  else
+                    SizedBox(
+                      height: listHeight,
+                      child: Stack(
+                        children: <Widget>[
+                          ListView.separated(
+                            controller: _scroll,
+                            keyboardDismissBehavior:
+                                ScrollViewKeyboardDismissBehavior.onDrag,
+                            itemCount: display.length,
+                            separatorBuilder: (_, _) =>
+                                const Divider(height: 1),
+                            itemBuilder: (BuildContext context, int i) {
+                              final QueueDisplayItem item = display[i];
+                              if (item.isGroup) {
+                                return _groupHeader(context, item.group!);
+                              } else {
+                                return _row(context, item.row!);
+                              }
+                            },
+                          ),
+                          if (_groupsLoading)
+                            Positioned(
+                              right: 4,
+                              top: 2,
+                              child: SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: AppColors.accent,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  if (_groupsError != null && !_loading)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text(
+                        _groupsError!,
+                        style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ),
                 ],
               ),
             ),
-          if (_groupsError != null && !_loading)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(
-                _groupsError!,
-                style: Theme.of(context).textTheme.bodySmall,
+        ],
+      ),
+    );
+  }
+
+  /// The search bar beside Queue (the PC header's field, phone scale): the
+  /// magnifier names it — no placeholder text — the count lives inside it
+  /// (`14`, or `9 / 14` while a filter thins the list), and the ✕ clears
+  /// the text — only while there is some.
+  Widget _searchField(int shown) {
+    final int total = _rows.length;
+    final bool filtering = _query.isNotEmpty || _favOnly;
+    final bool noMatch = filtering && shown == 0;
+    return Container(
+      height: 34,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      decoration: BoxDecoration(
+        color: const Color(0x33FFFFFF),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: noMatch
+              ? AppColors.iconIdle.withAlpha(120)
+              : Colors.transparent,
+        ),
+      ),
+      child: Row(
+        children: <Widget>[
+          Icon(
+            Icons.search,
+            size: 16,
+            color: noMatch
+                ? AppColors.iconIdle.withAlpha(95)
+                : AppColors.iconIdle,
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: TextField(
+              controller: _searchCtl,
+              style: const TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 13,
+              ),
+              cursorColor: AppColors.textPrimary,
+              decoration: const InputDecoration(
+                isDense: true,
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.symmetric(vertical: 6),
+              ),
+              onChanged: (String value) {
+                setState(() {
+                  _query = value.trim();
+                  // Typing into a collapsed card opens it — a filter must
+                  // be seen to be believed.
+                  if (!_expanded) {
+                    _expanded = true;
+                    unawaited(
+                      RemotePrefs.instance.setCollapsed('queue', false),
+                    );
+                  }
+                });
+                if (_query.isEmpty) {
+                  // The accordion is back — bring the playing row into view.
+                  SchedulerBinding.instance
+                      .addPostFrameCallback((_) => _scrollToCurrent());
+                }
+              },
+            ),
+          ),
+          Text(
+            filtering ? '$shown / $total' : '$total',
+            style: const TextStyle(
+              color: Color(0xFF7C7C80),
+              fontSize: 10,
+            ),
+          ),
+          // ✕ clears the text — only while there is some.
+          if (_query.isNotEmpty) ...<Widget>[
+            const SizedBox(width: 2),
+            Tooltip(
+              message: 'Clear search',
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: _clearSearch,
+                child: const Padding(
+                  padding: EdgeInsets.all(4),
+                  child: Icon(
+                    Icons.close,
+                    size: 15,
+                    color: AppColors.iconIdle,
+                  ),
+                ),
               ),
             ),
+          ],
         ],
       ),
     );
@@ -747,62 +961,66 @@ class _QueueCardState extends State<QueueCard> {
     );
   }
 
+  /// One group head (PC §10.5): `twist · name · count`. A tap toggles the
+  /// accordion — heads never play, so there is no play affordance here.
+  /// The head holding the playing channel keeps the accent twist.
   Widget _groupHeader(BuildContext context, QueueGroup group) {
+    final bool open = group.key == _openGroupKey;
     final int currentIndex = widget.snapshot.queue.index;
     final bool containsNow =
         currentIndex >= group.start && currentIndex < group.start + group.count;
-    return InkWell(
-      onTap: () => unawaited(_jumpGroup(group)),
-      child: Container(
-        height: _rowHeight,
-        color: containsNow
-            ? AppColors.surfaceHighlight
-            : AppColors.videoBackdrop,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        child: Row(
-          children: <Widget>[
-            Icon(
-              Icons.folder_special,
-              size: 18,
-              color: containsNow ? AppColors.accent : AppColors.iconIdle,
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                group.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 13.5,
-                  fontWeight: containsNow ? FontWeight.w700 : FontWeight.w600,
-                  color: containsNow
-                      ? AppColors.textPrimary
-                      : AppColors.textPrimary,
+    return Tooltip(
+      message: open ? 'Hide these channels' : 'Show these channels',
+      child: InkWell(
+        onTap: () => _toggleGroup(group),
+        child: Container(
+          height: _rowHeight,
+          color: containsNow
+              ? AppColors.surfaceHighlight
+              : AppColors.videoBackdrop,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Row(
+            children: <Widget>[
+              Icon(
+                open
+                    ? Icons.keyboard_arrow_down
+                    : Icons.keyboard_arrow_right,
+                size: 20,
+                color: containsNow ? AppColors.accent : AppColors.iconIdle,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  group.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight:
+                        containsNow ? FontWeight.w700 : FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: AppColors.surfaceOutline, width: 0.8),
+              const SizedBox(width: 8),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(10),
+                  border:
+                      Border.all(color: AppColors.surfaceOutline, width: 0.8),
+                ),
+                child: Text(
+                  '${group.count}',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        fontSize: 11,
+                      ),
+                ),
               ),
-              child: Text(
-                '${group.count}',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      fontSize: 11,
-                    ),
-              ),
-            ),
-            const SizedBox(width: 6),
-            Icon(
-              Icons.play_arrow,
-              size: 18,
-              color: containsNow ? AppColors.accent : AppColors.iconIdle,
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -810,6 +1028,11 @@ class _QueueCardState extends State<QueueCard> {
 
   Widget _row(BuildContext context, QueueRow row) {
     final bool now = row.now || row.index == widget.snapshot.queue.index;
+    // Channels carry the PC's bookmark: saved = solid accent, always
+    // visible; unsaved = dim outline (the phone has no hover to fade it
+    // in on, so it stays put). File rows have neither.
+    final bool channels = widget.snapshot.queue.isChannels;
+    final bool fav = channels && _favs.contains(row.title);
     return InkWell(
       onTap: () => unawaited(_jump(row)),
       child: SizedBox(
@@ -846,6 +1069,21 @@ class _QueueCardState extends State<QueueCard> {
               Text(
                 SaluTheme.clock(Duration(milliseconds: row.durationMs!)),
                 style: Theme.of(context).textTheme.bodySmall,
+              ),
+            if (channels)
+              IconButton(
+                iconSize: 18,
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.all(4),
+                constraints:
+                    const BoxConstraints(minWidth: 32, minHeight: 32),
+                tooltip:
+                    fav ? 'Remove from favourites' : 'Save as favourite',
+                onPressed: () => _toggleFav(row.title),
+                icon: Icon(
+                  fav ? Icons.bookmark : Icons.bookmark_border,
+                  color: fav ? AppColors.accent : AppColors.statusUnknown,
+                ),
               ),
           ],
         ),

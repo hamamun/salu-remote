@@ -201,6 +201,22 @@ set once and never touched again.
   Tap a row to jump to it. The **✕ in the header clears the playlist** (user,
   2026-09-22): confirm → `queue_clear` → the PC stops and empties the queue (§17.4).
   It never pushes the transport controls off-screen.
+- **Queue header, search and favourites (user, 2026-09-23):** the header mirrors the
+  PC panel's header — the **search bar sits beside Queue** with its count (`14`, or
+  `9 / 14` while a filter thins the list) and its **✕ clear button inside it** (only
+  while there is text), and the **bookmark sits beside the clear button** (channels
+  only). Typing filters rows by title and flattens grouped modes until it clears (the
+  PC's §10.3 rule); channel rows carry the PC's bookmark (solid when saved, dim
+  outline otherwise) and the header bookmark thins the list to favourites. Favourites
+  are kept on the phone by title — the phone never holds the PC's stable channel keys.
+- **Channel grouping is the PC's accordion (user, 2026-09-23):** in a grouped mode
+  every head paints but only the open group's channels do (autohide) — a head tap
+  toggles, it never plays, and the group holding the playing channel opens on its own
+  at every mode choice and track change, exactly like the PC panel.
+- **Channel mode greys transport (user, 2026-09-23):** while an m3u is loaded the
+  **−10 s / +10 s seeks** answer the snapshot's `seekable` (false for channels — a
+  live stream has no position) and **repeat · shuffle stay greyed out** (the PC drops
+  both in channel mode), instead of sending commands the PC would only ignore.
 - **Activity dot:** during any long PC job (folder read, subtitle search or download,
   queue page), a small dot pulses once next to the connection dot — appearing only after
   300 ms, so quick jobs never make it flicker. One dot, no text (user: "do what is best").

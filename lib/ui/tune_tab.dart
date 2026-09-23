@@ -16,9 +16,10 @@ import 'widgets.dart';
 /// segmented switch — and all three are meaningless when nothing is playing,
 /// so the tab says *"Nothing is playing"* in one place, with a Play shortcut.
 ///
-/// **In Web mode the tab becomes a D-pad** (§6.0) — but only when the PC
-/// advertises `web_key` in `hello.features`; a half-built PC never shows a
-/// dead button (`remote.md` §17.4 note).
+/// **In Web mode the tab becomes a D-pad** (§6.0). The pad draws only the keys
+/// the PC actually answers — `web_key` for ▲▼/OK/Esc when `hello.features`
+/// promises it, `browser_nav` for ◀▶ everywhere — so a half-built PC gets a
+/// smaller pad and one honest line, never a dead button (`remote.md` §17.4).
 class TuneTab extends StatefulWidget {
   const TuneTab({
     super.key,
@@ -78,17 +79,14 @@ class _TuneTabState extends State<TuneTab> {
     }
     if (widget.isWeb) {
       // mpv is not in the picture in Web mode: no equalizer, no subtitle
-      // track, no audio track. What there is, is a page — and a D-pad for it.
-      if (SaluClient.instance.supports('web_key')) {
-        return ListView(padding: const EdgeInsets.all(16), children: const <Widget>[
-          DPad(),
-        ]);
-      }
+      // track, no audio track. What there is, is a page — and a pad for it.
+      // The pad itself decides how many keys to draw: ▲▼ and OK only when the
+      // PC advertises `web_key`, ◀▶ (plain `browser_nav`) on every PC, and one
+      // plain line about whatever is missing. An empty tab would be a worse
+      // answer than a smaller pad.
       return ListView(
         padding: const EdgeInsets.all(16),
-        children: const <Widget>[
-          EmptyState(message: 'Nothing to adjust in the browser.'),
-        ],
+        children: const <Widget>[DPad()],
       );
     }
     if (snapshot.nothingPlaying) {

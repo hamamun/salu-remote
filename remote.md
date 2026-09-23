@@ -951,6 +951,16 @@ speed line joins in v1.1 (user approved 2026-09-20): the PC's own stops (`0.5× 
 | `fullscreen_toggle` / `fullscreen_set` | — / `{on}` | `WindowStateService.instance.toggleFullscreen()` / `setFullscreen(on)` |
 | `browser_nav` | `{action:"back"\|"forward"\|"reload"\|"stop"}` | routed through the browser bridge (§17.7) |
 | `browser_open` | `{url}` | `BrowserService.openInBrowser(url)` (switches to Web mode itself) |
+| `web_tabs_get` | — | the tab strip, mirrored: `{tabs:[{index,title,url,active,loading,hasMedia}], active, count}` (§17.13) |
+| `web_tab_activate` / `web_tab_close` | `{index}` | the strip's own select / close (§17.13) |
+| `web_tab_new` | `{url?}` | a new tab, on the PC's new-tab page when `url` is absent (§17.13) |
+| `web_bookmarks_get` | — | `{entries:[{name,url,folder}]}`, read-only (§17.13) |
+| `web_key` | `{key:"ArrowUp"\|"ArrowDown"\|"Enter"\|"Escape"}` | focus walking, injected like the web-media scripts (§17.13, `remote_apk_ui.md` §6.0) |
+| `web_focus_get` | — | `{focus:{label,tag,index,count,editable}}` without moving it (§17.13) |
+
+The last six are **feature-flagged**: the PC advertises `web_tabs`, `web_bookmarks` and
+`web_key` in `hello.features` only when it implements them, and the phone draws only what
+has been promised (§17.13). An older PC and a newer phone still talk — with fewer buttons.
 
 **Web media** — the user's rule (2026-09-20): when the PC's browser page is playing media,
 the phone offers **only the basics** — play/pause, seek, volume, mute, fullscreen — because
@@ -959,16 +969,35 @@ via JavaScript (§17.11); they are not mpv commands.
 
 | Verb | Args | PC call |
 |---|---|---|
-| `web_media_get` | — | inject a read script → `{found, playing, position, duration, volume, muted, canFull}` (`found:false` when the page has no reachable media element) |
+| `web_media_get` | — | inject a read script → `{found, playing, position, duration, volume, muted, canFull, seekable, unit}` (`found:false` when the page has no reachable media element) |
 | `web_media_toggle` | — | inject play/pause on the media element |
-| `web_media_seek` | `{to}` or `{delta}` | set `currentTime` |
-| `web_media_volume` | `{percent}` | `element.volume = percent/100` — **the page player's own volume**, never the Windows volume |
+| `web_media_seek` | `{to}` or `{delta}` | set `currentTime` — **both in milliseconds**, `{delta}` relative to now |
+| `web_media_volume` | `{percent}` | `element.volume = percent/100` — **integer percent 0–100**, the page player's own volume, never the Windows volume |
 | `web_media_mute` | `{on}` | `element.muted = on` |
 | `web_media_fullscreen` | — | `requestFullscreen()` / `exitFullscreen()` on the element's container |
 
 Every one of these answers `no_web_media` when the page's player cannot be reached
 (cross-origin iframe, DRM) — the phone then hides the controls instead of leaving them
 dead.
+
+**Units (fixed 2026-09-23 — this was a real bug, not a detail).** `position`, `duration`,
+`to` and `delta` are **milliseconds**, the house unit of every other time on the wire
+(`playback.position`, `seek_to`, `seek_by`); `volume` and `percent` are **integer percent
+0–100**. The bridge converts at its own edge — `currentTime * 1000` on the way out,
+`to / 1000` on the way in, `volume * 100` and `percent / 100` — so JavaScript's seconds and
+0–1 never reach the socket. Two more rules for the same reason:
+
+- `web_media_get` includes `"unit":"ms"` and `"volumeUnit":"percent"`, and the PC
+  advertises **`web_media_unit`** in `hello.features`. A phone that sees the promise stops
+  measuring; one that does not falls back to reading the units off the reply itself.
+- **Never `NaN`, never `Infinity`.** A live stream reports `duration: Infinity` and an
+  unloaded element `NaN`; neither survives `jsonEncode`, so both become `duration: 0` with
+  `seekable: false`. The phone greys its seek controls on that pair alone.
+
+Until the PC ships this, the phone answers in whatever dialect the last read arrived in —
+a fractional number can only be `currentTime` in seconds, a whole number is milliseconds —
+so the two halves stay usable while they disagree. That fallback is a bridge, not the
+design: the units above are the contract.
 
 ### 17.5 Snapshot additions (small, never big)
 
@@ -1047,8 +1076,11 @@ read a private field, so v1.1 adds a small bridge:
 3. **`browser_open` needs no bridge** — `BrowserService.openInBrowser` already routes a URL
    into the browser and switches mode.
 
-Full tab management (list, select, close, new, downloads shelf) still needs the tab strip
-itself to move into `BrowserService`; that is deliberately **v2** so v1.1 stays small.
+Full tab management (list, select, close, new) still needs the tab strip itself to move
+into `BrowserService`. That was **v2** when v1.1 was written; the phone side is now built
+and waiting for it, so it is specified as its own work package in **§17.13** — including
+the read-only bookmark mirror and `web_key`. The downloads shelf stays out: it is a
+PC-side surface with nothing a couch user would do with it.
 
 ### 17.8 Errors added in v1.1
 
@@ -1063,6 +1095,9 @@ itself to move into `BrowserService`; that is deliberately **v2** so v1.1 stays 
 | `quota` | "OpenSubtitles download limit reached — try again tomorrow." |
 | `no_preset` | (silent, logged) an unknown preset key or speed key |
 | `no_web_media` | "This site's player can't be controlled from outside." (cross-origin iframe, DRM, or no media on the page) |
+| `no_web_tabs` | "Tab control needs an updated SALU on the PC." (a `web_tab*` verb reached a build without the strip mirror) |
+| `tab_not_found` | "That tab is no longer open." (an index the strip does not have any more — the phone re-reads) |
+| `no_web_bookmarks` | "The PC's browser has no bookmarked pages." |
 | `busy` | "The PC is busy — try again in a moment." (a 3-second handler timeout) |
 
 ### 17.9 Tests and checklist additions
@@ -1116,6 +1151,29 @@ Manual checklist additions:
     with it. Repeat and let the toast time out (4 s) → the seat disappears **without** a
     tap, and playback is untouched. Repeat and press Esc on the PC → same. The seat must
     never outlive the toast on either screen.
+23. **(2026-09-23) Web units.** Open a YouTube video on the PC → the phone's Web body shows
+    the video's **real** clock (not 1000× it, not `0:00`). Drag the seek bar to the middle
+    and let go → the picture is at the middle within a second, and the thumb does **not**
+    snap back to where it was first. Drag the volume to 10% → the page's own volume drops
+    while the thumb moves, and stays at 10. Long-press the page card → the diagnostics
+    sheet's `Units read` says `time ms · volume %` and the raw reply agrees with it.
+24. **Web transport.** −10 s twice in a beat → the page is 20 s back, not 10. A live page
+    with no reported length → no seek bar, one line saying why, and the two nudges greyed.
+25. **Tabs.** With `web_tabs` advertised: the tab count opens the strip, the rows match the
+    PC's own tab bar, tapping one switches the PC's page, ✕ closes it and the list shrinks
+    in place, and "New tab" with a URL opens that URL in a **new** tab. Without the flag:
+    the same door says so in one line and still opens a URL.
+26. **Saved pages.** ☆ → "Save this page" puts the current URL into SALU's URL library with
+    the page title as its name (visible in Browse → Streams afterwards, and on the PC);
+    tapping a saved row opens it in the PC's browser; with `web_bookmarks` advertised the
+    browser's own bookmarks are listed above them, read-only.
+27. **D-pad.** With `web_key` advertised: ▲▼ walks the page's focus, the PC draws a ring on
+    whatever is focused, the phone's card under the pad names it (`Subscribe · BUTTON · 4 of
+    120`), OK clicks it, Esc leaves page fullscreen. Without the flag: the pad is ◀ ▶ only,
+    with one line saying what is missing — never a dead button.
+28. **A page whose player is out of reach** still behaves: one failed write drops the Web
+    body to the nav shape with its one honest line, and navigating somewhere else (the URL
+    box, a tab switch) gives the next page a fresh trial instead of staying dropped.
 
 ### 17.10 Build-order impact
 
@@ -1149,20 +1207,38 @@ players only expose those, so the remote would only be dead buttons if it offere
 `WebFind.buildScript`, the exit-fullscreen snippet in `BrowserScreen`). The new
 `remote_web_media_bridge.dart` reuses that exact pattern with one new script family:
 
-- **Find:** pick the largest `video`/`audio` element in the *top document* (largest
-  `videoWidth × videoHeight`, falling back to duration), remember nothing — every command
-  re-finds it, so navigation never invalidates a handle.
+- **Find:** pick the page's *real* player in the *top document* — the largest
+  `video`/`audio` element by `videoWidth × videoHeight` (falling back to duration), **with
+  a preference for one that is not paused**, and ignoring elements that cannot be the
+  programme (zero size, `display:none`, or a duration under two seconds: those are advert
+  bumps, previews and looping background clips). Remember nothing — every command re-finds
+  it, so navigation never invalidates a handle. Getting this wrong is the difference
+  between "the remote works" and "the remote is muting an advert while the film plays".
 - **Read** (`web_media_get`): `!el.paused, el.currentTime, el.duration, el.volume,
   el.muted`, plus whether fullscreen is possible (`el.webkitSupportsFullscreen` or a
-  non-null `requestFullscreen` on the container).
-- **Write** (the other `web_media_*` verbs): `play()/pause()`, `currentTime = …`,
-  `volume = percent/100`, `muted = …`, `requestFullscreen()/exitFullscreen()`.
+  non-null `requestFullscreen` on the container) — **converted to the wire units of §17.4
+  before it is sent**: `position`/`duration` in milliseconds, `volume` in integer percent,
+  `seekable` = a finite duration greater than zero, and `unit:"ms"` so the phone never has
+  to measure. `Infinity` and `NaN` (live streams, unloaded elements) are sent as `0` with
+  `seekable:false` — they cannot be encoded in JSON at all.
+- **Write** (the other `web_media_*` verbs): `play()/pause()`,
+  `currentTime = to / 1000` (or `+= delta / 1000`), `volume = percent / 100`, `muted = …`,
+  `requestFullscreen()/exitFullscreen()`. A `to` outside `[0, duration]` is **clamped**, not
+  rejected — a thumb dragged past the end means "the end".
 
 **Cost control.** `web.hasMedia` in the snapshot is refreshed by a lightweight find-script
 every 500 ms **only while** (a) a device is connected, (b) mode is `web`, and (c) the tab
 is active — otherwise no polling at all. Full reads happen only when the phone asks
 (~1/s while its Web body is on screen, the same throttle as player positions). Every
 injection carries the house 2-second timeout and swallows errors, exactly like `park()`.
+
+Two more cost rules from the phone side (2026-09-23). The phone sends **one read at a
+time** — a page that takes four seconds to answer must never find four requests stacked
+behind it — and its seek bar is **live**, like the player's own: about 4 writes a second
+while a thumb drags, a final one on release, all of them `web_media_seek`. That is well
+inside the 30 cmd/s ceiling, but a bridge that is still injecting an earlier seek should
+**coalesce**: apply the newest `to`, drop the ones in between. Scrubbing a page is exactly
+the workload where a queue of stale seeks shows up as stutter.
 
 **Where it honestly fails** — and the phone must hide the controls, not show them broken:
 
@@ -1188,3 +1264,121 @@ surprise the user did not ask for. The nav shape (no media) has no volume contro
 | 5 | Speed | Assistant's call: **in, as a chips row at the bottom of Tune → Equalizer** (the PC's own stops). PC impact: `speed_set` + `"speed"` in the snapshot's tune block (§17.5). |
 | 6 | Activity indicator | Assistant's call: **yes** — one quiet dot in the header, phone-side only, no PC impact. |
 | + | Web media | **New rule:** Web mode + page playing media ⇒ only play/pause, seek, volume, mute, fullscreen (§17.11). PC impact: `remote_web_media_bridge.dart` + the `web_media_*` verbs + `hasMedia` in the snapshot. |
+
+### 17.13 Web tabs, bookmarks and the focus pad (added 2026-09-23)
+
+**Why this exists.** The phone's Web body grew the doors the couch user actually asked
+for: the **open-tab list** with a close button on every row, **new tab**, the **saved and
+bookmarked pages**, **−10 s / +10 s** on the page's own player, live seek and volume bars,
+and a **D-pad that says what it is about to click**. The phone side is built in
+`salu-remote` (its `lib/ui/web_body.dart`, `lib/ui/web_sheets.dart`, `lib/ui/dpad.dart`);
+everything it needs from the PC is specified here, and `pc_part.md` is the work order that
+walks through it file by file.
+
+**Feature flags, not a version bump.** `proto` stays `1` and every verb here is additive.
+The PC advertises what it implements in `hello.features` —
+
+| Feature | Means | Phone behaviour without it |
+|---|---|---|
+| `web_media_unit` | `web_media_get` speaks §17.4's units (ms + percent) and says so with `unit` | The phone reads the units off the reply itself and answers in kind — usable, but a bridge, not the design |
+| `web_tabs` | `web_tabs_get` / `web_tab_activate` / `web_tab_close` / `web_tab_new` | The tab door says *"This PC does not report its tabs yet"* and still opens a URL (`open_url`) |
+| `web_bookmarks` | `web_bookmarks_get` | The saved-pages sheet shows only SALU's URL library, which already works |
+| `web_key` | `web_key` + `web_focus_get`, **and the focus ring is drawn** | The D-pad is ◀ ▶ only (`browser_nav`), with one line saying what is missing |
+
+An older PC and a newer phone therefore still talk, with fewer buttons — never with dead
+ones.
+
+#### 17.13.1 The tab strip has to move into `BrowserService`
+
+§17.7 mirrored one *scalar* set (`webTitle`, `webUrl`, `webCanBack`, `webCanForward`,
+`webLoading`, `webTabCount`) because the tabs themselves live in `BrowserScreenState`'s
+private `_tabs` / `_active`. A phone cannot read a private field, so:
+
+1. The strip moves (or is mirrored) into `BrowserService` as the single source of truth:
+   a `List<WebTabMirror>` plus `activeIndex`, each entry carrying `title`, `url`, `active`,
+   `loading`, `hasMedia` — the same values the tab bar already paints.
+2. `WebTab` keeps owning its `WebviewController`. The service holds a **mirror**, not the
+   controllers, and it is refreshed where the screen already calls `setStripTitle(...)`.
+3. Writes go back through one handler the screen installs
+   (`BrowserService.setTabHandler(...)`), exactly like `setNavHandler(...)` for
+   `browser_nav`: activate = the screen's own tab select, close = the screen's own close
+   (its confirmation, its "last tab" rule, its session bookkeeping), new = the screen's own
+   add-tab, then navigate. **No second code path** — a remote that closes a tab differently
+   from the ✕ on the strip is a bug nobody can reproduce.
+
+Closing the **last** tab is the PC's existing decision and stays that way (whatever its own
+✕ does — new-tab page, or close the browser window). The phone shows whatever the next
+`web_tabs_get` says; if the browser left Web mode on its own, the snapshot's `mode` flips
+and the phone follows, as it always does.
+
+#### 17.13.2 The verbs
+
+| Verb | Args | Reply | Errors |
+|---|---|---|---|
+| `web_tabs_get` | — | `web_tabs_result {tabs:[{index,title,url,active,loading,hasMedia}], active, count}` | `no_web_tabs` |
+| `web_tab_activate` | `{index}` | `ack` | `tab_not_found`, `no_web_tabs` |
+| `web_tab_close` | `{index}` | `ack` (+ the new `count` if it is cheap) | `tab_not_found`, `no_web_tabs` |
+| `web_tab_new` | `{url?}` | `ack {index}` — the new tab is active | `no_web_tabs`, `invalid_arguments` |
+| `web_bookmarks_get` | — | `web_bookmarks_result {entries:[{name,url,folder}]}` | `no_web_bookmarks` |
+| `web_key` | `{key}` | `ack {focus:{label,tag,index,count,editable}}` | `no_web_media` is **not** the code here — use `invalid_arguments` for an unknown key |
+| `web_focus_get` | — | `ack {focus:{…}}` | as above |
+
+`index` is the strip's own index at the moment of the call, and the phone re-reads after
+every change, so an index that has gone stale answers `tab_not_found` rather than closing
+the wrong page. **Never accept a negative or out-of-range index silently.**
+
+`web_tab_new {url}` is the only "open" that is guaranteed to make a *new* tab; `open_url`
+and `browser_open` keep doing exactly what the PC's own Open-URL modal does. The phone uses
+`web_tab_new` when `web_tabs` is advertised and `open_url` otherwise, so both paths must
+work.
+
+#### 17.13.3 Size discipline
+
+The frame budget is 8 KB (§6.2) and a tab strip is a list of strings — the one place this
+protocol can genuinely overflow. So: **cap the list** (send at most 50 tabs, and say the
+real total in `count`), **truncate** each `title` to 80 characters and each `url` to 180,
+and never send favicons, histories or anything encoded. Bookmarks the same way: at most 200
+entries, titles 80 / urls 180, folders one level deep. If a list would still not fit, send
+fewer rows — the phone renders what arrives and shows `count` as the truth.
+
+Neither list ever rides the snapshot. The snapshot keeps its single scalar `web.tabs`,
+which is what the phone's nav row shows before anything is asked for.
+
+#### 17.13.4 Bookmarks, read-only
+
+`web_bookmarks_get` mirrors whatever the PC's browser already keeps as its own
+bookmarks/ favourites — read-only, because a phone that can silently rewrite the PC's
+bookmark bar is a phone that can lose it. If the browser has no bookmark store, do **not**
+advertise `web_bookmarks`: the phone then shows SALU's URL library alone, which is already
+a complete "saved pages" feature (`library_get` / `library_add`, and the Web body's
+**Save this page** writes the current URL and title into it).
+
+#### 17.13.5 `web_key` and the focus ring
+
+Same injection path as the web-media bridge (`WebTab.executeScript`, 2 s timeout, errors
+swallowed), same find-the-top-document rule:
+
+- **Read the order:** the page's focusable elements in tab order (`a[href]`, `button`,
+  `input`, `select`, `textarea`, `[tabindex]:not([tabindex="-1"])`, filtered to visible and
+  enabled), with `document.activeElement` as the current seat.
+- **`ArrowDown` / `ArrowUp`:** move one seat forward/back, `scrollIntoView({block:'center'})`,
+  `focus()`.
+- **`Enter`:** `click()` on the focused element — or, when it is a text field, submit its
+  form. **Where a text field has the focus the arrows belong to the caret**, so the same
+  keys type-navigate instead of hopping elements; say which it was with `editable:true` and
+  the phone's line changes to match.
+- **`Escape`:** leave element/page fullscreen, close the topmost dialog. A couch remote with
+  no Esc is a remote that can get the PC stuck in a full-screen advert.
+- **The ring is part of the feature, not a nicety** (`remote_apk_ui.md` §6.0): draw a
+  visible outline on whatever has focus while a phone is connected in Web mode. Without it
+  the user is steering blind and the pad is worse than useless.
+- **Answer with the focus** — `{label, tag, index, count, editable}` — in every `web_key`
+  ack: `label` is the element's own text (`innerText`, `value`, `aria-label`, `alt`,
+  `title`, in that order, truncated to 60), `tag` its element name, `index`/`count` its
+  seat in the order. That is what turns "I pressed down four times" into "I am on
+  *Subscribe · BUTTON · 4 of 120*".
+
+**Honest limits, unchanged:** this walks the page's own tab order, so it is exactly as good
+as the site's markup. Canvas-drawn single-page apps that manage focus themselves will not
+answer, and nothing injected from outside can fix that. The phone says so in one line when
+no focus is reported.

@@ -1013,6 +1013,75 @@ class SubtitleSaveResult {
   final String? fileName;
 }
 
+// ── the page's own player (`remote.md` §17.11) ──────────────────────────────
+
+/// The unit the PC's web-media bridge spoke in for a time value.
+///
+/// The contract (`remote.md` §17.4) is **milliseconds** — the house unit of
+/// every other time on the wire (`playback.position`, `seek_to`, `seek_by`).
+/// But §17.11's read is JavaScript's `el.currentTime`, which is **seconds**,
+/// and a bridge that hands that straight back speaks seconds. Getting this
+/// wrong is invisible in every other control and catastrophic in two: the
+/// clock under the seek bar reads 1000× off, and a seek lands 1000× off.
+///
+/// So the phone never guesses from the *size* of a number — a 45-minute video
+/// is `2700` in seconds and `2700000` in milliseconds, and both look like a
+/// plausible duration. It takes the PC's word when the PC gives one (a `unit`
+/// field in the reply, or `web_media_unit` in `hello.features`) and otherwise
+/// uses the one reliable tell: **a fractional number can only be
+/// `currentTime` in seconds**, because every millisecond count in this
+/// protocol is an integer.
+enum WebTimeUnit { milliseconds, seconds }
+
+/// The unit the PC spoke for the page player's volume: the contract's integer
+/// **percent** (0–100) or JavaScript's own **fraction** (0–1).
+enum WebVolumeUnit { percent, fraction }
+
+/// The units one `web_media_get` reply was spoken in, so a seek can be written
+/// back in the same voice it was read in.
+///
+/// Volume is deliberately *not* written through this: §17.11 states the write
+/// side as `element.volume = percent/100`, so `web_media_volume` carries a
+/// percent even from a PC that reports a fraction on the way out.
+class WebMediaDialect {
+  const WebMediaDialect({
+    this.time = WebTimeUnit.milliseconds,
+    this.volume = WebVolumeUnit.percent,
+  });
+
+  /// The contract: milliseconds and integer percent (`remote.md` §17.4).
+  static const WebMediaDialect contract = WebMediaDialect();
+
+  final WebTimeUnit time;
+  final WebVolumeUnit volume;
+
+  bool get timeIsSeconds => time == WebTimeUnit.seconds;
+
+  /// The wire number for a time. Seconds keep their fraction — `currentTime`
+  /// is not a whole-second clock, and rounding it would make a live seek
+  /// visibly step.
+  num timeValue(Duration value) =>
+      timeIsSeconds ? value.inMilliseconds / 1000 : value.inMilliseconds;
+
+  @override
+  bool operator ==(Object other) =>
+      other is WebMediaDialect && other.time == time && other.volume == volume;
+
+  @override
+  int hashCode => Object.hash(time, volume);
+
+  @override
+  String toString() =>
+      'time ${timeIsSeconds ? 's' : 'ms'} · volume ${volume == WebVolumeUnit.fraction ? '0–1' : '%'}';
+}
+
+/// One `web_media_get` reply, in the phone's own units.
+///
+/// Times come out as [Duration]s and volume as an integer percent whatever the
+/// PC spoke; [dialect] remembers what that was, because the seek has to go
+/// back the same way. [raw] keeps the PC's own words for the Web body's
+/// diagnostics sheet — the one place a unit question is answered by looking
+/// rather than by guessing.
 class WebMediaInfo {
   const WebMediaInfo({
     this.found = false,
@@ -1022,25 +1091,317 @@ class WebMediaInfo {
     this.volume = 100,
     this.muted = false,
     this.canFullscreen = false,
+    this.seekable = false,
+    this.dialect = WebMediaDialect.contract,
+    this.raw = const <String, Object?>{},
   });
 
-  factory WebMediaInfo.from(Map<String, Object?> raw) => WebMediaInfo(
-        found: _b(raw['found']),
-        playing: _b(raw['playing']),
-        position: Duration(milliseconds: (_d(raw['position']) * 1000).round()),
-        duration: Duration(milliseconds: (_d(raw['duration']) * 1000).round()),
-        volume: (_d(raw['volume']) * 100).round().clamp(0, 100).toInt(),
-        muted: _b(raw['muted']),
-        canFullscreen: _b(raw['canFull']),
-      );
+  /// [contractUnits] is the PC's own promise — `web_media_unit` in
+  /// `hello.features` — and outranks everything except an explicit `unit`
+  /// field in the reply.
+  factory WebMediaInfo.from(Map<String, Object?> raw, {bool contractUnits = false}) {
+    final Object? rawPosition = _webNum(raw, 'position', 'time', 'currentTime');
+    final Object? rawDuration = _webNum(raw, 'duration', 'length');
+    final Object? rawVolume = _webNum(raw, 'volume', 'vol');
+    final WebTimeUnit timeUnit =
+        _webTimeUnit(raw, contractUnits, rawPosition, rawDuration);
+    final WebVolumeUnit volumeUnit = _webVolumeUnit(raw, contractUnits, rawVolume);
+    final Duration position = _webDuration(rawPosition, timeUnit);
+    final Duration duration = _webDuration(rawDuration, timeUnit);
+    final Object? rawSeekable = raw['seekable'];
+    return WebMediaInfo(
+      found: _b(raw['found']),
+      playing: _b(raw['playing']),
+      position: position,
+      duration: duration,
+      volume: _webPercent(rawVolume, volumeUnit),
+      muted: _b(raw['muted']),
+      canFullscreen: _b(raw['canFull']) || _b(raw['canFullscreen']),
+      // The PC may say so outright; otherwise a page player is seekable
+      // exactly when it knows how long it is — a live stream never does.
+      seekable: rawSeekable is bool ? rawSeekable : duration > Duration.zero,
+      dialect: WebMediaDialect(time: timeUnit, volume: volumeUnit),
+      raw: Map<String, Object?>.unmodifiable(raw),
+    );
+  }
 
   final bool found;
   final bool playing;
   final Duration position;
   final Duration duration;
+
+  /// Integer percent, 0–100 — whatever the PC spoke.
   final int volume;
   final bool muted;
   final bool canFullscreen;
+  final bool seekable;
+  final WebMediaDialect dialect;
+
+  /// The PC's reply, verbatim, for the diagnostics sheet.
+  final Map<String, Object?> raw;
+
+  /// Equal when everything the *screen* draws is equal. [raw] is left out on
+  /// purpose: the Web body polls once a second and must not rebuild for a
+  /// reply that says the same thing in the same units.
+  @override
+  bool operator ==(Object other) =>
+      other is WebMediaInfo &&
+      other.found == found &&
+      other.playing == playing &&
+      other.position == position &&
+      other.duration == duration &&
+      other.volume == volume &&
+      other.muted == muted &&
+      other.canFullscreen == canFullscreen &&
+      other.seekable == seekable &&
+      other.dialect == dialect;
+
+  @override
+  int hashCode => Object.hash(
+        found,
+        playing,
+        position,
+        duration,
+        volume,
+        muted,
+        canFullscreen,
+        seekable,
+        dialect,
+      );
+}
+
+/// The first of the named keys that holds a number — the contract's own name
+/// first, then the two a JavaScript-shaped reply might use instead. A bridge
+/// that answers `{currentTime: 12.3}` rather than `{position: 12.3}` still
+/// reads correctly instead of silently reporting `0:00`; the canonical names
+/// remain the contract (`remote.md` §17.4).
+///
+/// A number that arrives as a *string* is parsed too. `executeScript` hands the
+/// PC whatever the page's JavaScript returned, and one `toString()` on the way
+/// through a plugin would otherwise cost the user a seek bar with nothing on
+/// screen to explain why.
+Object? _webNum(Map<String, Object?> raw, String key, String alt, [String? alt2]) {
+  for (final String name in <String>[key, alt, if (alt2 != null) alt2]) {
+    final Object? value = raw[name];
+    if (value is num) return value;
+    if (value is String) {
+      final double? parsed = double.tryParse(value);
+      if (parsed != null) return parsed;
+    }
+  }
+  return raw[key];
+}
+
+bool _webFractional(Object? value) {
+  if (value is! num) return false;
+  final double number = value.toDouble();
+  return number.isFinite && number != number.truncateToDouble();
+}
+
+WebTimeUnit _webTimeUnit(
+  Map<String, Object?> raw,
+  bool contractUnits,
+  Object? position,
+  Object? duration,
+) {
+  final Object? stated = raw['unit'] ?? raw['timeUnit'];
+  if (stated is String) {
+    final String unit = stated.trim().toLowerCase();
+    if (const <String>['s', 'sec', 'secs', 'second', 'seconds'].contains(unit)) {
+      return WebTimeUnit.seconds;
+    }
+    if (const <String>['ms', 'milli', 'millis', 'millisecond', 'milliseconds']
+        .contains(unit)) {
+      return WebTimeUnit.milliseconds;
+    }
+  }
+  if (contractUnits) return WebTimeUnit.milliseconds;
+  if (_webFractional(duration) || _webFractional(position)) return WebTimeUnit.seconds;
+  return WebTimeUnit.milliseconds;
+}
+
+Duration _webDuration(Object? value, WebTimeUnit unit) {
+  if (value is! num) return Duration.zero;
+  final double raw = value.toDouble();
+  // A live stream reports `Infinity` and an unloaded element `NaN`. Neither
+  // survives JSON, and neither means "seekable" — both read as "unknown".
+  if (!raw.isFinite || raw <= 0) return Duration.zero;
+  final int ms = unit == WebTimeUnit.seconds ? (raw * 1000).round() : raw.round();
+  return Duration(milliseconds: ms);
+}
+
+WebVolumeUnit _webVolumeUnit(
+  Map<String, Object?> raw,
+  bool contractUnits,
+  Object? volume,
+) {
+  final Object? stated = raw['volumeUnit'];
+  if (stated is String) {
+    final String unit = stated.trim().toLowerCase();
+    if (const <String>['fraction', 'ratio', '0-1', '0..1'].contains(unit)) {
+      return WebVolumeUnit.fraction;
+    }
+    if (const <String>['percent', '%', '0-100'].contains(unit)) {
+      return WebVolumeUnit.percent;
+    }
+  }
+  if (contractUnits) return WebVolumeUnit.percent;
+  // Anything inside 0…1 is JavaScript's `el.volume`. That reads a contract
+  // percent of exactly 1 as 100% — a trade worth making, because nobody sets
+  // 1% and `el.volume === 1` is every page's default.
+  if (volume is num) {
+    final double raw = volume.toDouble();
+    if (raw.isFinite && raw >= 0 && raw <= 1) return WebVolumeUnit.fraction;
+  }
+  return WebVolumeUnit.percent;
+}
+
+int _webPercent(Object? volume, WebVolumeUnit unit) {
+  if (volume is! num) return 100;
+  final double raw = volume.toDouble();
+  if (!raw.isFinite) return 100;
+  final double percent = unit == WebVolumeUnit.fraction ? raw * 100 : raw;
+  return percent.round().clamp(0, 100).toInt();
+}
+
+// ── the browser's tabs, bookmarks and focus (`remote.md` §17.7, §17.13) ─────
+
+/// One open tab in the PC's browser, as the PC reports it. The list never
+/// rides the snapshot — it is one `web_tabs_get` away, because a strip of 40
+/// tabs is bigger than the whole 8 KB frame budget.
+class WebTabInfo {
+  const WebTabInfo({
+    required this.index,
+    required this.title,
+    required this.url,
+    this.active = false,
+    this.loading = false,
+    this.hasMedia = false,
+  });
+
+  factory WebTabInfo.from(Map<String, Object?> raw) => WebTabInfo(
+        index: _i(raw['index']),
+        title: _sn(raw['title']) ?? _sn(raw['url']) ?? 'Untitled tab',
+        url: _s(raw['url']),
+        active: _b(raw['active']),
+        loading: _b(raw['loading']),
+        hasMedia: _b(raw['hasMedia']),
+      );
+
+  final int index;
+  final String title;
+  final String url;
+  final bool active;
+  final bool loading;
+
+  /// The PC's own verdict on whether this tab has a reachable player.
+  final bool hasMedia;
+}
+
+/// `web_tabs_get` — the whole strip plus which seat is live.
+class WebTabPage {
+  const WebTabPage({required this.tabs, this.activeIndex = -1, this.count = 0});
+
+  factory WebTabPage.from(Map<String, Object?> raw) {
+    final List<WebTabInfo> tabs =
+        _maps(raw['tabs']).map(WebTabInfo.from).toList(growable: false);
+    final Object? rawActive = raw['active'] ?? raw['activeIndex'];
+    int active = rawActive is num ? rawActive.toInt() : -1;
+    if (active < 0) {
+      // No index from the PC: the row it marked active is the answer.
+      for (final WebTabInfo tab in tabs) {
+        if (tab.active) {
+          active = tab.index;
+          break;
+        }
+      }
+    }
+    return WebTabPage(
+      tabs: tabs,
+      activeIndex: active,
+      count: raw['count'] is num ? _i(raw['count']) : tabs.length,
+    );
+  }
+
+  final List<WebTabInfo> tabs;
+  final int activeIndex;
+
+  /// What the snapshot's `web.tabs` says — kept so a truncated list can still
+  /// be honest about the real total.
+  final int count;
+
+  bool get isEmpty => tabs.isEmpty;
+
+  bool isActive(WebTabInfo tab) => tab.active || tab.index == activeIndex;
+}
+
+/// One bookmarked page in the PC's browser (`web_bookmarks_get`, read-only).
+class WebBookmarkInfo {
+  const WebBookmarkInfo({required this.name, required this.url, this.folder = ''});
+
+  factory WebBookmarkInfo.from(Map<String, Object?> raw) => WebBookmarkInfo(
+        name: _sn(raw['name']) ?? _sn(raw['title']) ?? _sn(raw['url']) ?? 'Bookmark',
+        url: _s(raw['url']),
+        folder: _s(raw['folder']),
+      );
+
+  final String name;
+  final String url;
+  final String folder;
+}
+
+/// The bookmark list out of a `web_bookmarks_get` reply. The PC may key it
+/// `entries` or `bookmarks`; either way a missing or malformed list reads as
+/// an empty one, never as an exception.
+List<WebBookmarkInfo> webBookmarksFrom(Map<String, Object?> raw) =>
+    _maps(raw['entries'] ?? raw['bookmarks'])
+        .map(WebBookmarkInfo.from)
+        .toList(growable: false);
+
+/// What the page has focused right now, so the D-pad is not steered blind
+/// (`remote_apk_ui.md` §6.0). Rides the `web_key` ack and `web_focus_get`.
+class WebFocusInfo {
+  const WebFocusInfo({
+    this.label,
+    this.tag,
+    this.index = 0,
+    this.count = 0,
+    this.editable = false,
+  });
+
+  factory WebFocusInfo.from(Object? raw) {
+    final Map<String, Object?> map = _map(raw);
+    if (map.isEmpty) return const WebFocusInfo();
+    return WebFocusInfo(
+      label: _sn(map['label']) ?? _sn(map['text']),
+      tag: _sn(map['tag'])?.toUpperCase(),
+      index: _i(map['index']),
+      count: _i(map['count']),
+      editable: _b(map['editable']) || _b(map['isInput']),
+    );
+  }
+
+  final String? label;
+  final String? tag;
+  final int index;
+  final int count;
+
+  /// A text field has the focus: the arrows belong to the caret and OK
+  /// submits rather than clicks (`remote_apk_ui.md` §6.0).
+  final bool editable;
+
+  bool get known => label != null || tag != null;
+
+  /// The one line under the pad: `Subscribe · BUTTON · 4 of 120`.
+  String get line {
+    final List<String> parts = <String>[
+      if (label != null) label!,
+      if (tag != null) tag!,
+      if (count > 0) '${index + 1} of $count',
+    ];
+    if (parts.isEmpty) return 'Nothing focused yet';
+    return parts.join(' · ');
+  }
 }
 
 /// `hello` — the server's identity, sent before auth.
@@ -1073,4 +1434,41 @@ class ServerInfo {
     if (value.isEmpty) return 'Your PC';
     return value;
   }
+}
+
+/// The `hello.features` names this build of the phone understands.
+///
+/// A feature is a **promise the PC makes about itself**, and the phone draws
+/// only what has been promised: an unadvertised verb is a dead button, and a
+/// dead button is the fastest way to make an app feel broken
+/// (`remote_apk_ui.md` §4.2). Everything here is additive — `proto` stays 1 —
+/// so an older PC and a newer phone still talk, with fewer buttons.
+///
+/// The PC side of each promise is a work package in `pc_part.md`.
+abstract final class RemoteFeature {
+  /// `web_media_get` speaks the contract — milliseconds and integer percent —
+  /// and says so with a `unit` field. Without it the phone reads the units off
+  /// the reply itself ([WebMediaInfo.from]).
+  static const String webMediaUnit = 'web_media_unit';
+
+  /// Focus walking for the D-pad: `web_key` and `web_focus_get`, with the ring
+  /// drawn on the page (`remote_apk_ui.md` §6.0).
+  static const String webKey = 'web_key';
+
+  /// The browser's tab strip, mirrored: `web_tabs_get`, `web_tab_activate`,
+  /// `web_tab_close`, `web_tab_new` (`remote.md` §17.7).
+  static const String webTabs = 'web_tabs';
+
+  /// The browser's bookmarked pages, read-only: `web_bookmarks_get`
+  /// (`remote.md` §17.13).
+  static const String webBookmarks = 'web_bookmarks';
+
+  /// Every name above, for the diagnostics sheet — the phone says which of
+  /// its own doors the PC has opened.
+  static const List<String> all = <String>[
+    webMediaUnit,
+    webKey,
+    webTabs,
+    webBookmarks,
+  ];
 }

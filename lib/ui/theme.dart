@@ -158,57 +158,26 @@ abstract final class SaluTheme {
   }
 }
 
-/// A slider that follows your thumb while you drag and sends **one** command
-/// when you let go (`remote_apk_ui.md` §8: "Optimistic, locked against incoming
-/// updates while dragging; one command on release").
+/// The app's **one** slider: it fires **while you drag**, not only when you let
+/// go (user, 2026-09-22: "instead of release it will be realtime").
 ///
-/// Without this the PC's snapshot would fight the finger: the thumb would snap
-/// back to the PC's position on every frame.
-class CommitSlider extends StatefulWidget {
-  const CommitSlider({
-    super.key,
-    required this.value,
-    required this.max,
-    required this.onCommit,
-  });
-
-  final double value;
-  final double max;
-  final ValueChanged<double> onCommit;
-
-  @override
-  State<CommitSlider> createState() => _CommitSliderState();
-}
-
-class _CommitSliderState extends State<CommitSlider> {
-  double? _dragging;
-
-  @override
-  Widget build(BuildContext context) {
-    final double max = widget.max <= 0 ? 1 : widget.max;
-    final double value = (_dragging ?? widget.value).clamp(0, max).toDouble();
-    return Slider(
-      value: value,
-      max: max,
-      onChanged: (double next) => setState(() => _dragging = next),
-      onChangeEnd: (double next) {
-        setState(() => _dragging = null);
-        widget.onCommit(next);
-      },
-    );
-  }
-}
-
-/// A slider that fires **while you drag**, not only when you let go
-/// (user, 2026-09-22: "instead of release it will be realtime").
+/// Optimistic — locked against incoming snapshots while the finger is down, so
+/// the thumb never snaps back mid-drag — and every drag streams throttled
+/// updates to the PC. The throttle keeps ~8 sends/second: inside
+/// `remote_apk_ui.md` §8's "≤ 20/s while dragging" and well inside the PC's 30
+/// commands/second budget. A trailing timer guarantees the newest value always
+/// goes out even if the finger stops moving before lifting, and the release
+/// sends the final value exactly once.
 ///
-/// Like [CommitSlider] it is optimistic — locked against incoming snapshots
-/// while the finger is down, so the thumb never snaps back mid-drag — but
-/// every drag also streams throttled updates to the PC. The throttle keeps
-/// ~8 sends/second: inside `remote_apk_ui.md` §8's "≤ 20/s while dragging"
-/// and well inside the PC's 30 commands/second budget. A trailing timer
-/// guarantees the newest value always goes out even if the finger stops
-/// moving before lifting, and the release sends the final value exactly once.
+/// There used to be a second slider next to this one that sent **one** command
+/// on release, and the Web body used it for the page player's seek and volume.
+/// It is gone (2026-09-23): a bar that does nothing until you let go feels
+/// broken beside one that moves the picture, and "the seek bar responds
+/// abnormally" was the complaint. One behaviour, one widget, everywhere.
+///
+/// [gap] is the one knob: the Web body's seek bar passes a coarser 250 ms,
+/// because it is scrubbing a page player through injected JavaScript on the PC
+/// rather than nudging mpv, and §17.11 asks for coalescing rather than a queue.
 class LiveSlider extends StatefulWidget {
   const LiveSlider({
     super.key,

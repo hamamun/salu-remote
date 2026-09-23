@@ -129,7 +129,7 @@ class _SubtitlesPaneState extends State<SubtitlesPane> {
         final SubsInfo next = SubsInfo.from(reply.data);
         final int? oldPosition =
             _info == null ? null : _selectedRowPosition(_info!);
-        final int? nextPosition = _selectedRowPosition(next);
+        final int nextPosition = _selectedRowPosition(next);
         final String? oldId = _info == null ? null : _selectedTrackId(_info!);
         final String? nextId = _selectedTrackId(next);
         final bool shouldScroll =

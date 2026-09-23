@@ -219,13 +219,15 @@ class SaluClient {
   }
 
   /// The user's own off switch. [forget] also drops the token.
+  /// When the PC closes, the remote must return to the initial connect screen
+  /// — no stale title, no old queue. So every disconnect clears the snapshot.
   Future<void> disconnect({bool forget = false}) async {
     _wanted = false;
     await _teardown();
     link.value = LinkState.off;
+    snapshot.value = null;
     if (forget) {
       await RemotePrefs.instance.forgetPc();
-      snapshot.value = null;
       server.value = null;
       address.value = null;
       _host = null;
@@ -433,6 +435,7 @@ class SaluClient {
       problemMessage.value = 'This app and SALU speak different versions. '
           'Update SALU Remote (PC ${info.version}).';
       link.value = LinkState.needsPairing;
+      snapshot.value = null;
       unawaited(_teardown());
       return;
     }
@@ -512,6 +515,7 @@ class SaluClient {
       problemCode.value = code;
       problemMessage.value = text;
       link.value = LinkState.needsPairing;
+      snapshot.value = null;
       _wanted = false;
       if (code == RemoteErrorCode.badToken) {
         // The PC forgot this phone. Keeping the token would make every later
@@ -538,6 +542,7 @@ class SaluClient {
         ', authenticated: $wasAuthenticated)');
     if (!_wanted) {
       if (link.value != LinkState.needsPairing) link.value = LinkState.off;
+      snapshot.value = null;
       return;
     }
     switch (closeCode) {
@@ -545,12 +550,14 @@ class SaluClient {
         problemCode.value = RemoteErrorCode.versionMismatch;
         problemMessage.value = 'Update SALU Remote — the PC speaks another version.';
         link.value = LinkState.needsPairing;
+        snapshot.value = null;
         _wanted = false;
         return;
       case RemoteCloseCode.notPrivateLan:
         problemCode.value = 'not_private_lan';
         problemMessage.value = 'The PC only accepts phones on its own local network.';
         link.value = LinkState.needsPairing;
+        snapshot.value = null;
         _wanted = false;
         return;
       case RemoteCloseCode.disabled:
@@ -582,10 +589,13 @@ class SaluClient {
     }
     if (problemCode.value != null && _noRetryCodes.contains(problemCode.value)) {
       link.value = LinkState.needsPairing;
+      snapshot.value = null;
       _wanted = false;
       return;
     }
+    // PC closed / network lost — clear stale playback so UI returns to initial connect screen.
     link.value = LinkState.unreachable;
+    snapshot.value = null;
     _scheduleReconnect();
   }
 
@@ -593,6 +603,7 @@ class SaluClient {
     problemCode.value = code;
     problemMessage.value = message;
     link.value = LinkState.unreachable;
+    snapshot.value = null;
     if (_wanted) _scheduleReconnect();
   }
 
@@ -622,6 +633,7 @@ class SaluClient {
         unawaited(_teardown().then((_) {
           if (_wanted) {
             link.value = LinkState.unreachable;
+            snapshot.value = null;
             _scheduleReconnect();
           }
         }));

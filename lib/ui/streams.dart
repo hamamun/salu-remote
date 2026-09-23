@@ -75,86 +75,27 @@ class _StreamsPaneState extends State<StreamsPane> {
   // ── add / play / rename / delete ─────────────────────────────────────────
 
   Future<void> _addDialog() async {
-    // The one-keyboard rule (§12): the clipboard is checked first — and it
-    // really is FIRST, awaited before the dialog (and its controllers)
-    // exist. The old fire-and-forget `.then` could land after Cancel had
-    // already disposed the controllers — writing into a dead controller
-    // crashed the screen (the yellow/red exception view).
+    // Clipboard is checked before the dialog exists (one-keyboard rule §12).
     String clip = '';
     try {
       clip = (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '';
     } catch (_) {
-      // No readable clipboard (OEM restrictions) — open without autofill.
+      // OEM clipboard restrictions — open without autofill.
     }
     if (!mounted) return;
-    final TextEditingController url =
-        TextEditingController(text: looksLikeUrl(clip) ? clip : '');
-    final TextEditingController name = TextEditingController();
-    bool save = true;
-    try {
-      await showDialog<void>(
-        context: context,
-        builder: (BuildContext dialogContext) => StatefulBuilder(
-          builder: (BuildContext dialogContext, StateSetter setDialogState) =>
-              AlertDialog(
-        backgroundColor: AppColors.surface,
-        title: const Text('Add a URL'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            TextField(
-              controller: url,
-              autofocus: true,
-              keyboardType: TextInputType.url,
-              autocorrect: false,
-              textCapitalization: TextCapitalization.none,
-              decoration: const InputDecoration(
-                labelText: 'URL',
-                hintText: 'http://… · a YouTube link · an .m3u',
-              ),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: name,
-              textCapitalization: TextCapitalization.none,
-              decoration: const InputDecoration(labelText: 'Name (optional)'),
-            ),
-            CheckboxListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Save on the PC too',
-                  style: TextStyle(fontSize: 13.5)),
-              value: save,
-              onChanged: (bool? v) => setDialogState(() => save = v ?? false),
-            ),
-          ],
-        ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            child: Text(looksLikeUrl(url.text) ? 'Play this link' : 'Add stream'),
-            onPressed: () {
-              final String trimmedUrl = url.text.trim();
-              if (trimmedUrl.isEmpty) return;
-              final String? nameText =
-                  name.text.trim().isEmpty ? null : name.text.trim();
-              final bool play = looksLikeUrl(trimmedUrl);
-              Navigator.of(dialogContext).pop();
-              unawaited(_addAndMaybePlay(trimmedUrl, nameText, save, play));
-            },
-          ),
-        ],
-      ),
-        ),
-      );
-    } finally {
-      url.dispose();
-      name.dispose();
-    }
+    final String initial = looksLikeUrl(clip) ? clip : '';
+    final _AddUrlResult? result = await showDialog<_AddUrlResult>(
+      context: context,
+      builder: (BuildContext dialogContext) => _AddUrlDialog(initialUrl: initial),
+    );
+    if (result == null || !mounted) return;
+    if (result.url.trim().isEmpty) return;
+    await _addAndMaybePlay(
+      result.url.trim(),
+      result.name?.trim().isEmpty == true ? null : result.name?.trim(),
+      result.save,
+      looksLikeUrl(result.url),
+    );
   }
 
   Future<void> _addAndMaybePlay(String url, String? name, bool save, bool play) async {
@@ -170,39 +111,15 @@ class _StreamsPaneState extends State<StreamsPane> {
   }
 
   Future<void> _rename(LibraryEntryInfo entry) async {
-    final TextEditingController name =
-        TextEditingController(text: entry.name);
-    try {
-      final String? result = await showDialog<String>(
-        context: context,
-        builder: (BuildContext dialogContext) => AlertDialog(
-          backgroundColor: AppColors.surface,
-          title: const Text('Rename'),
-          content: TextField(
-            controller: name,
-            autofocus: true,
-            decoration: const InputDecoration(labelText: 'Name'),
-          ),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext)
-                  .pop(name.text.trim().isEmpty ? null : name.text.trim()),
-              child: const Text('Save'),
-            ),
-          ],
-        ),
-      );
-      if (result == null || !mounted) return;
-      // `library_add` with the same URL is the PC's update door (§17.4).
-      await runRemote(context, () => _client.libraryAdd(entry.url, name: result, save: true));
-      await _refresh();
-    } finally {
-      name.dispose();
-    }
+    if (!mounted) return;
+    final String? result = await showDialog<String>(
+      context: context,
+      builder: (BuildContext dialogContext) => _RenameDialog(initialName: entry.name),
+    );
+    if (result == null || !mounted) return;
+    // `library_add` with the same URL is the PC's update door (§17.4).
+    await runRemote(context, () => _client.libraryAdd(entry.url, name: result, save: true));
+    await _refresh();
   }
 
   Future<void> _rowSheet(LibraryEntryInfo entry) async {
@@ -368,6 +285,169 @@ class _StreamsPaneState extends State<StreamsPane> {
           ],
         ),
       ),
+    );
+  }
+}
+
+// ── dialog widgets that own their controllers ───────────────────────────────
+
+class _AddUrlResult {
+  const _AddUrlResult({
+    required this.url,
+    this.name,
+    required this.save,
+  });
+
+  final String url;
+  final String? name;
+  final bool save;
+}
+
+class _AddUrlDialog extends StatefulWidget {
+  const _AddUrlDialog({required this.initialUrl});
+
+  final String initialUrl;
+
+  @override
+  State<_AddUrlDialog> createState() => _AddUrlDialogState();
+}
+
+class _AddUrlDialogState extends State<_AddUrlDialog> {
+  late final TextEditingController _urlController;
+  late final TextEditingController _nameController;
+  bool _save = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _urlController = TextEditingController(text: widget.initialUrl);
+    _nameController = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _urlController.dispose();
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // SingleChildScrollView prevents the yellow/black overflow when the
+    // keyboard opens (RenderFlex vertical overflow) — the content scrolls
+    // inside the dialog's constraints instead of exceeding them.
+    return AlertDialog(
+      backgroundColor: AppColors.surface,
+      title: const Text('Add a URL'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            TextField(
+              controller: _urlController,
+              autofocus: true,
+              keyboardType: TextInputType.url,
+              autocorrect: false,
+              textCapitalization: TextCapitalization.none,
+              decoration: const InputDecoration(
+                labelText: 'URL',
+                hintText: 'http://… · a YouTube link · an .m3u',
+              ),
+              onChanged: (_) => setState(() {}), // Update button label live.
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _nameController,
+              textCapitalization: TextCapitalization.none,
+              decoration: const InputDecoration(labelText: 'Name (optional)'),
+            ),
+            const SizedBox(height: 4),
+            CheckboxListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Save on the PC too',
+                  style: TextStyle(fontSize: 13.5)),
+              value: _save,
+              onChanged: (bool? v) => setState(() => _save = v ?? false),
+            ),
+          ],
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final String trimmedUrl = _urlController.text.trim();
+            if (trimmedUrl.isEmpty) return;
+            final String? nameText = _nameController.text.trim().isEmpty
+                ? null
+                : _nameController.text.trim();
+            Navigator.of(context).pop(
+              _AddUrlResult(url: trimmedUrl, name: nameText, save: _save),
+            );
+          },
+          child: Text(
+            looksLikeUrl(_urlController.text) ? 'Play this link' : 'Add stream',
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _RenameDialog extends StatefulWidget {
+  const _RenameDialog({required this.initialName});
+
+  final String initialName;
+
+  @override
+  State<_RenameDialog> createState() => _RenameDialogState();
+}
+
+class _RenameDialogState extends State<_RenameDialog> {
+  late final TextEditingController _nameController;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController(text: widget.initialName);
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: AppColors.surface,
+      title: const Text('Rename'),
+      content: SingleChildScrollView(
+        child: TextField(
+          controller: _nameController,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Name'),
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final String trimmed = _nameController.text.trim();
+            Navigator.of(context).pop(trimmed.isEmpty ? null : trimmed);
+          },
+          child: const Text('Save'),
+        ),
+      ],
     );
   }
 }

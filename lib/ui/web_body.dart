@@ -356,74 +356,104 @@ class _WebBodyState extends State<WebBody> {
   /// type or paste on the phone, the PC browser goes there. The field is
   /// pre-filled with the clipboard when it holds a URL (the one-keyboard
   /// rule, §12).
-  ///
-  /// Uses the State's own [context] rather than a caller-supplied one: the
-  /// clipboard read is an async gap, and only `State.mounted` can vouch for
-  /// `State.context` afterwards (`use_build_context_synchronously`).
   Future<void> _urlDialog() async {
-    final TextEditingController text = TextEditingController();
     final String current = widget.snapshot.web.url ?? '';
-    // Check the clipboard before the dialog opens, so the field is
-    // pre-filled in the first frame.
-    final ClipboardData? clipboard = await Clipboard.getData(Clipboard.kTextPlain);
-    if (clipboard?.text case final String? clip when looksLikeUrl(clip ?? '')) {
-      text.text = clip!;
-    }
-    if (!mounted) return;
+    String initial = '';
     try {
-      await showDialog<void>(
-        context: context,
-        builder: (BuildContext dialogContext) => AlertDialog(
-          backgroundColor: AppColors.surface,
-          title: const Text('Open a URL on the PC'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              if (current.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: Text(
-                    'Current: $current',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(dialogContext).textTheme.bodySmall,
-                  ),
-                ),
-              TextField(
-                controller: text,
-                autofocus: true,
-                keyboardType: TextInputType.url,
-                autocorrect: false,
-                decoration: const InputDecoration(
-                  labelText: 'Address or link',
-                  hintText: 'https://…',
+      final ClipboardData? clipboard = await Clipboard.getData(Clipboard.kTextPlain);
+      if (clipboard?.text case final String? clip when looksLikeUrl(clip ?? '')) {
+        initial = clip!;
+      }
+    } catch (_) {}
+    if (!mounted) return;
+    final String? action = await showDialog<String>(
+      context: context,
+      builder: (BuildContext dialogContext) => _OpenUrlDialog(
+        initialUrl: initial,
+        currentUrl: current,
+      ),
+    );
+    if (!mounted) return;
+    if (action == 'reload') {
+      unawaited(runRemote(context, () => _client.browserNav('reload')));
+    } else if (action != null && action.isNotEmpty) {
+      unawaited(runRemote(context, () => _client.openUrl(action)));
+    }
+  }
+}
+
+class _OpenUrlDialog extends StatefulWidget {
+  const _OpenUrlDialog({required this.initialUrl, required this.currentUrl});
+
+  final String initialUrl;
+  final String currentUrl;
+
+  @override
+  State<_OpenUrlDialog> createState() => _OpenUrlDialogState();
+}
+
+class _OpenUrlDialogState extends State<_OpenUrlDialog> {
+  late final TextEditingController _textController;
+
+  @override
+  void initState() {
+    super.initState();
+    _textController = TextEditingController(text: widget.initialUrl);
+  }
+
+  @override
+  void dispose() {
+    _textController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: AppColors.surface,
+      title: const Text('Open a URL on the PC'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            if (widget.currentUrl.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text(
+                  'Current: ${widget.currentUrl}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
-            ],
-          ),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () {
-                unawaited(runRemote(context, () => _client.browserNav('reload')));
-                Navigator.of(dialogContext).pop();
-              },
-              child: const Text('Reload'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final String url = text.text.trim();
-                if (url.isEmpty) return;
-                unawaited(runRemote(context, () => _client.openUrl(url)));
-                Navigator.of(dialogContext).pop();
-              },
-              child: const Text('Open'),
+            TextField(
+              controller: _textController,
+              autofocus: true,
+              keyboardType: TextInputType.url,
+              autocorrect: false,
+              decoration: const InputDecoration(
+                labelText: 'Address or link',
+                hintText: 'https://…',
+              ),
             ),
           ],
         ),
-      );
-    } finally {
-      text.dispose();
-    }
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop('reload'),
+          child: const Text('Reload'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final String url = _textController.text.trim();
+            if (url.isEmpty) return;
+            Navigator.of(context).pop(url);
+          },
+          child: const Text('Open'),
+        ),
+      ],
+    );
   }
 }

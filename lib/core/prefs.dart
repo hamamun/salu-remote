@@ -27,6 +27,7 @@ class RemotePrefs {
   static const String _kFocus = 'ui_focus_mode';
   static const String _kTab = 'ui_last_tab';
   static const String _kHidden = 'ui_hidden:';
+  static const String _kChannelFavs = 'channel_favs_v1';
 
   SharedPreferences? _prefs;
 
@@ -143,6 +144,20 @@ class RemotePrefs {
 
   Future<void> setCollapsed(String key, bool value) async {
     await _store?.setBool('$_kHidden collapsed:$key', value);
+  }
+
+  /// Favourite channel titles, chosen on this phone (the queue card's
+  /// bookmark). The phone holds titles only — never URLs or m3u metadata
+  /// (`remote.md` privacy rule) — so the title is the key, the same
+  /// last-resort key the PC's own `ChannelFavouritesService.channelKey`
+  /// falls back to. Global and never pruned: a favourite whose channel is
+  /// not in today's list is an orphan, exactly as on the PC.
+  Set<String> get channelFavourites => Set<String>.unmodifiable(
+        _store?.getStringList(_kChannelFavs) ?? const <String>[],
+      );
+
+  Future<void> setChannelFavourites(Set<String> favourites) async {
+    await _store?.setStringList(_kChannelFavs, favourites.toList(growable: false));
   }
 }
 

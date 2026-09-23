@@ -305,9 +305,15 @@ class _PlayerBody extends StatelessWidget {
   /// play/pause · stop · previous · next · −10 s · +10 s · fullscreen.
   /// No filled play button anymore and no text chips — every seat is the
   /// same plain icon at the same size.
+  ///
+  /// The two seeks answer the snapshot's `seekable` alone — the PC's own
+  /// flag (`duration > 0 && kind != channel`), so a loaded m3u greys them
+  /// exactly the way the PC's transport dims its seek marks in channel
+  /// mode (§10.8a: a live stream has no position).
   Widget _transport(BuildContext context) {
     final bool playing = snapshot.playback.isPlaying;
     final bool fullscreen = snapshot.window.fullscreen;
+    final bool seekable = snapshot.playback.seekable;
     return SaluCard(
       padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
       child: Row(
@@ -336,11 +342,13 @@ class _PlayerBody extends StatelessWidget {
           _control(
             icon: Icons.replay_10,
             tooltip: 'Back 10 seconds',
+            enabled: seekable,
             onPressed: () => unawaited(runRemote(context, () => client.seekBy(-10000))),
           ),
           _control(
             icon: Icons.forward_10,
             tooltip: 'Forward 10 seconds',
+            enabled: seekable,
             onPressed: () => unawaited(runRemote(context, () => client.seekBy(10000))),
           ),
           _control(
@@ -359,6 +367,11 @@ class _PlayerBody extends StatelessWidget {
   /// The repeat icon itself says which mode is on: `repeat` for all,
   /// `repeat_one` for one, accent-coloured whenever it is not off.
   ///
+  /// While a channel list (m3u) is loaded both seats stay greyed out: the PC
+  /// drops repeat and shuffle in channel mode (there is no order for
+  /// either to act on), so the remote greys them instead of sending a
+  /// command the PC would only ignore.
+  ///
   /// **Start over** `⟲` is a conditional third seat (`remote_apk_ui.md` §4.1):
   /// it mirrors the PC's Resume toast — appears when `playback.resume` is
   /// non-null, disappears when the toast closes. Tap = `restart` (0:00 and
@@ -366,6 +379,7 @@ class _PlayerBody extends StatelessWidget {
   /// and never appears without one, on either screen.
   Widget _toggles(BuildContext context) {
     final SaluPlayback playback = snapshot.playback;
+    final bool channels = snapshot.queue.isChannels;
     return SaluCard(
       padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
       child: Row(
@@ -379,12 +393,14 @@ class _PlayerBody extends StatelessWidget {
               RepeatMode.one => 'Repeat one',
             },
             active: playback.repeat != RepeatMode.off,
+            enabled: !channels,
             onPressed: () => unawaited(runRemote(context, client.repeatCycle)),
           ),
           _control(
             icon: Icons.shuffle,
             tooltip: playback.shuffle ? 'Shuffle on' : 'Shuffle off',
             active: playback.shuffle,
+            enabled: !channels,
             onPressed: () => unawaited(runRemote(context, client.shuffleToggle)),
           ),
           // Start over — only while the PC's Resume toast is up.
@@ -406,19 +422,28 @@ class _PlayerBody extends StatelessWidget {
 
   /// The one control-button shape — every transport and toggle seat uses it,
   /// so the whole block is the same style at the same size. [active] tints
-  /// the icon with the accent.
+  /// the icon with the accent; [enabled] false greys it out and deadens it
+  /// (the channel-mode seeks and toggles above).
   Widget _control({
     required IconData icon,
     required String tooltip,
     required VoidCallback onPressed,
     bool active = false,
+    bool enabled = true,
   }) {
     return IconButton(
       iconSize: 26,
       visualDensity: VisualDensity.compact,
       tooltip: tooltip,
-      onPressed: onPressed,
-      icon: Icon(icon, color: active ? AppColors.accent : AppColors.iconIdle),
+      onPressed: enabled ? onPressed : null,
+      icon: Icon(
+        icon,
+        color: !enabled
+            ? AppColors.statusUnknown
+            : active
+                ? AppColors.accent
+                : AppColors.iconIdle,
+      ),
     );
   }
 

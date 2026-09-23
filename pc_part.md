@@ -337,3 +337,31 @@ rules).
 *Phone side (salu-remote, already staged): the paced whole-queue loader is
 implemented; the chips row + group headers land after this protocol exists,
 behind the `unknown_command` hide — no version gate needed.*
+
+---
+
+## 12. Phone-local channel favourites + queue search (no PC work needed, future sync optional)
+
+**Status (2026-09-23): implemented in salu-remote alone — this section is a record,
+not a work order.** The phone's queue card now mirrors the PC panel's header: a search
+bar beside Queue (title filter, count + clear button inside, flattens grouped modes
+while typing — the panel's §10.3 rule), a favourites bookmark beside the clear button
+(channels only), per-row bookmark toggles, and the grouped accordion (every head paints,
+only the open group's channels do — a head tap toggles, it never plays; the playing
+channel's group opens on its own). The Play tab greys the ±10 s seeks (via the
+snapshot's `seekable`) and repeat/shuffle while an m3u is loaded. All of it reuses the
+existing verbs/snapshot — no protocol change.
+
+**One honest gap, by design:** favourites are kept on the phone by title (the phone
+holds titles only — the privacy rule), so they do not sync with the PC panel's
+`ChannelFavouritesService` (stable `tvg-id → tvg-name → name` keys per playlist host).
+If sync is ever wanted, the shape is:
+
+1. `queue_get` rows gain `fav: true|false` (one bool per row — no keys cross the wire).
+2. New verb `queue_fav_toggle {index}` → `ChannelFavouritesService.toggleFavourite`
+   on that row; the next `queue_get` reflects it. Invalid index → `invalid_arguments`.
+3. Old phone → new PC: ignores `fav`. New phone → old PC: `unknown_command` on the
+   toggle → the phone keeps its local titles as today. Safe both ways, no version gate.
+
+Until then the phone's titles are the favourites — same header filter, same row toggle,
+same never-prune rule as the panel, just unsynced.

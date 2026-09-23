@@ -33,9 +33,12 @@ import 'widgets.dart';
 /// - `queue.grouping` from snapshot: available modes + current mode.
 /// - Chips row above the list: Flat / Category / Country / Language.
 /// - `queue_groups` + `queue_group_set` behind the `unknown_command` hide.
-/// - Grouped modes are the PC's accordion: every head paints, but only the
-///   open group's channels do (autohide) — a head tap toggles, it never
-///   plays, and the group holding the playing channel opens on its own.
+/// - Grouped modes are the PC's accordion: by default every head stays
+///   collapsed and only the played channel's group is expanded (autohide)
+///   — a head tap toggles, it never plays, and the group holding the
+///   playing channel opens on its own at every mode choice and track
+///   change. While the PC's heads load, the list waits (skeleton) instead
+///   of flashing the full flat list the PC never shows.
 /// - A search flattens the list whatever the mode is (PC §10.3) — the
 ///   grouping is suspended, not forgotten.
 /// - Favourites are chosen on this phone (titles only — the phone never
@@ -654,6 +657,17 @@ class _QueueCardState extends State<QueueCard> {
     final bool showGroupingChips =
         queue.isChannels && _groupingSupported != false;
 
+    // Grouped mode never shows the full flat list: until the PC's heads
+    // arrive the list waits instead of flashing every channel (the PC
+    // computes its heads synchronously — the phone waits one round-trip
+    // rather than showing an "everything expanded" moment that the PC
+    // never has). A search still flattens immediately: it needs no heads.
+    final bool awaitingHeads = _currentMode != QueueGroupingMode.flat &&
+        queue.isChannels &&
+        _groupingSupported != false &&
+        _groups.isEmpty &&
+        _query.isEmpty;
+
     // The header mirrors the PC panel's header: the search bar sits beside
     // Queue with its count and its clear button inside it, and the
     // favourites bookmark sits beside the clear button (channels only).
@@ -686,8 +700,14 @@ class _QueueCardState extends State<QueueCard> {
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       const SizedBox(width: 6),
+                      // The total count lives here beside Queue — named
+                      // "channels" on a channel list so the total channel
+                      // count is unmistakable — and again inside the
+                      // search bar (`14`, or `9 / 14` while filtered).
                       Text(
-                        '${queue.count} ${queue.count == 1 ? 'item' : 'items'}',
+                        queue.isChannels
+                            ? '${queue.count} ${queue.count == 1 ? 'channel' : 'channels'}'
+                            : '${queue.count} ${queue.count == 1 ? 'item' : 'items'}',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ],
@@ -738,6 +758,16 @@ class _QueueCardState extends State<QueueCard> {
                       child: Text(_error!,
                           style: Theme.of(context).textTheme.bodySmall),
                     )
+                  else if (awaitingHeads && _groupsLoading)
+                    const _SkeletonRows()
+                  else if (awaitingHeads)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text(
+                        _groupsError ?? 'No groups found.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    )
                   else if (display.isEmpty)
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 8),
@@ -781,7 +811,10 @@ class _QueueCardState extends State<QueueCard> {
                         ],
                       ),
                     ),
-                  if (_groupsError != null && !_loading)
+                  // The groups error line stays out while the list area
+                  // itself is already showing it (the failed-heads case
+                  // above) — one sentence, never two.
+                  if (_groupsError != null && !_loading && !awaitingHeads)
                     Padding(
                       padding: const EdgeInsets.only(top: 6),
                       child: Text(

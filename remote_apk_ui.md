@@ -212,7 +212,11 @@ set once and never touched again.
 - **Channel grouping is the PC's accordion (user, 2026-09-23):** in a grouped mode
   every head paints but only the open group's channels do (autohide) — a head tap
   toggles, it never plays, and the group holding the playing channel opens on its own
-  at every mode choice and track change, exactly like the PC panel.
+  at every mode choice and track change, exactly like the PC panel. By default every
+  head stays collapsed and only the played channel's group is expanded; while the
+  heads load the list waits instead of flashing the full flat list. The total channel
+  count sits beside Queue in the header (`Queue · 1234 channels`) and again inside
+  the search bar, with each head carrying its own group count.
 - **Channel mode greys transport (user, 2026-09-23):** while an m3u is loaded the
   **−10 s / +10 s seeks** answer the snapshot's `seekable` (false for channels — a
   live stream has no position) and **repeat · shuffle stay greyed out** (the PC drops

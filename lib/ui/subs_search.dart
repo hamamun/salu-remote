@@ -83,7 +83,11 @@ class _SubsSearchScreenState extends State<SubsSearchScreen> {
     setState(() => _engine = next);
   }
 
-  bool get _canDownload => _engine.ready;
+  // Download is always tappable after a search — the PC is the truth.
+  // The old check `_engine.ready` (key && signedIn && !quota) made the button
+  // stay gray when the snapshot engine was stale even though the PC could
+  // download fine. Keep the notices for guidance, but let the PC answer.
+  bool get _canDownload => true;
 
   Future<void> _search() async {
     final String query = _query.text.trim();
@@ -120,7 +124,7 @@ class _SubsSearchScreenState extends State<SubsSearchScreen> {
   }
 
   Future<void> _download(SubtitleRow row) async {
-    if (_downloadingFileId != null || !_canDownload) return;
+    if (_downloadingFileId != null) return;
     setState(() => _downloadingFileId = row.fileId);
     final RemoteReply reply =
         await runRemote(context, () => _client.subsDownload(row.fileId));
@@ -172,7 +176,7 @@ class _SubsSearchScreenState extends State<SubsSearchScreen> {
                     const SizedBox(width: 10),
                     FilledButton(
                       onPressed:
-                          _engine.key && !_searching && _query.text.trim().isNotEmpty
+                          !_searching && _query.text.trim().isNotEmpty
                               ? () => unawaited(_search())
                               : null,
                       child: Text(_searching ? 'Searching…' : 'Search'),
@@ -307,7 +311,7 @@ class _SubsSearchScreenState extends State<SubsSearchScreen> {
                     ],
                   )
                 : FilledButton(
-                    onPressed: _canDownload && !downloading
+                    onPressed: !downloading
                         ? () => unawaited(_download(row))
                         : null,
                     child: downloading

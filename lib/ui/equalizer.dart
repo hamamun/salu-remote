@@ -270,8 +270,6 @@ class _EqualizerPaneState extends State<EqualizerPane> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              _CurvePreview(gains: _gains),
-              const SizedBox(height: 12),
               _presets(info),
               const SizedBox(height: 10),
               _myChip(info),
@@ -332,8 +330,6 @@ class _EqualizerPaneState extends State<EqualizerPane> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    _CurvePreview(gains: _gains),
-                    const SizedBox(height: 12),
                     _presets(info),
                     const SizedBox(height: 10),
                     _myChip(info),
@@ -599,60 +595,4 @@ class _BandPainter extends CustomPainter {
       oldDelegate.value != value || oldDelegate.height != height;
 }
 
-/// The live curve above the sliders: a quiet hairline through the ten band
-/// values, with the 0 dB line dashed. Redraws as you drag (the pane passes
-/// its live `_gains` list on every build).
-class _CurvePreview extends StatelessWidget {
-  const _CurvePreview({required this.gains});
-
-  final List<double> gains;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 84,
-      child: CustomPaint(painter: _CurvePainter(gains: gains)),
-    );
-  }
-}
-
-class _CurvePainter extends CustomPainter {
-  _CurvePainter({required this.gains});
-
-  final List<double> gains;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (gains.length < 2) return;
-    final double mid = size.height / 2;
-    // The 0 dB line, dashed.
-    final Paint dash = Paint()
-      ..color = AppColors.divider
-      ..strokeWidth = 1.2;
-    for (double x = 0; x < size.width; x += 8) {
-      canvas.drawLine(Offset(x, mid), Offset((x + 4).clamp(0.0, size.width), mid), dash);
-    }
-    // The curve.
-    final Path path = Path();
-    final double amp = size.height / 2 - 6;
-    for (int i = 0; i < gains.length; i++) {
-      final double x = size.width * i / (gains.length - 1);
-      final double y = mid - (gains[i] / 12.0) * amp;
-      if (i == 0) {
-        path.moveTo(x, y);
-      } else {
-        path.lineTo(x, y);
-      }
-    }
-    canvas.drawPath(
-      path,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2
-        ..color = AppColors.accent,
-    );
-  }
-
-  @override
-  bool shouldRepaint(_CurvePainter oldDelegate) => oldDelegate.gains != gains;
-}
+/// Curve preview removed per user request — no visual carve needed.

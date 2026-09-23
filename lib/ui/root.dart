@@ -42,6 +42,8 @@ class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
   int _tab = 0;
   bool _focus = false;
 
+  LinkState _lastLink = LinkState.idle;
+
   @override
   void initState() {
     super.initState();
@@ -51,7 +53,9 @@ class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
     _tab = _prefs.lastTab.clamp(0, 2);
     _activeTab.value = _tab;
     _focus = _prefs.focusMode;
+    _lastLink = _client.link.value;
     _client.snapshot.addListener(_onSnapshot);
+    _client.link.addListener(_onLinkState);
     DeepLink.pending.addListener(_onDeepLink);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       // First launch: nothing remembered, nothing connected = the Connect
@@ -65,9 +69,28 @@ class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     unawaited(ScreenAwake.set(false));
     _client.snapshot.removeListener(_onSnapshot);
+    _client.link.removeListener(_onLinkState);
     DeepLink.pending.removeListener(_onDeepLink);
     _activeTab.dispose();
     super.dispose();
+  }
+
+  void _onLinkState() {
+    final LinkState current = _client.link.value;
+    final LinkState previous = _lastLink;
+    _lastLink = current;
+    // PC closed / connection lost — return to initial stage (user request).
+    // Snapshot is already cleared in SaluClient so PlayTab shows waiting.
+    // Jump to Play and open the Connect sheet, same as first launch.
+    if (previous == LinkState.online && current != LinkState.online) {
+      if (_tab != 0) _setTab(0);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (_client.snapshot.value == null) {
+          _openConnectSheet();
+        }
+      });
+    }
   }
 
   @override

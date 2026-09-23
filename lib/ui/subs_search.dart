@@ -87,7 +87,6 @@ class _SubsSearchScreenState extends State<SubsSearchScreen> {
   // The old check `_engine.ready` (key && signedIn && !quota) made the button
   // stay gray when the snapshot engine was stale even though the PC could
   // download fine. Keep the notices for guidance, but let the PC answer.
-  bool get _canDownload => true;
 
   Future<void> _search() async {
     final String query = _query.text.trim();

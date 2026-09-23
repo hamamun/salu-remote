@@ -836,7 +836,10 @@ class _QueueCardState extends State<QueueCard> {
   /// the text — only while there is some.
   Widget _searchField(int shown) {
     final int total = _rows.length;
-    final bool filtering = _query.isNotEmpty || _favOnly;
+    // `_favOnly` is channels-only (the header bookmark hides on file
+    // queues), so it counts as filtering only there.
+    final bool filtering =
+        _query.isNotEmpty || (_favOnly && widget.snapshot.queue.isChannels);
     final bool noMatch = filtering && shown == 0;
     return Container(
       height: 34,

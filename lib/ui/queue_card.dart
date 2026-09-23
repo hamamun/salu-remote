@@ -155,46 +155,40 @@ class _QueueCardState extends State<QueueCard> {
     // phone's own `queue_group_set` round-tripped via snapshot).
     final QueueGroupingMode newMode = queue.grouping.mode;
     final List<QueueGroupingMode> newAvailable = queue.grouping.available;
-    bool groupingChanged = false;
-    if (newMode != _currentMode) {
-      _currentMode = newMode;
-      groupingChanged = true;
-    }
-    if (!_listEquals(newAvailable, _availableModes)) {
-      _availableModes = newAvailable;
-      groupingChanged = true;
-    }
+    final bool modeChanged = newMode != _currentMode;
+    final bool availChanged = !_listEquals(newAvailable, _availableModes);
+    final bool groupingChanged = modeChanged || availChanged;
+
+    if (modeChanged) _currentMode = newMode;
+    if (availChanged) _availableModes = newAvailable;
 
     if (queue.count != old.count) {
       // The playlist itself changed (tracks added, queue cleared): refetch.
       unawaited(_fetch(autoscroll: true));
     } else if (groupingChanged) {
-      // Mode flipped — need new groups, and the list layout changed.
-      if (_currentMode == QueueGroupingMode.flat) {
-        if (mounted) {
-          setState(() {
-            _groups = const <QueueGroup>[];
-            _groupsLoading = false;
-            _groupsError = null;
-          });
+      if (modeChanged) {
+        // Mode flipped — need new groups, and the list layout changed.
+        if (_currentMode == QueueGroupingMode.flat) {
+          if (mounted) {
+            setState(() {
+              _groups = const <QueueGroup>[];
+              _groupsLoading = false;
+              _groupsError = null;
+            });
+          }
+        } else {
+          unawaited(_fetchGroups());
         }
         SchedulerBinding.instance
             .addPostFrameCallback((_) => _scrollToCurrent());
       } else {
-        unawaited(_fetchGroups());
-      }
-      // Even when flattening, the display list changed, so scroll again.
-      if (_currentMode == QueueGroupingMode.flat) {
-        SchedulerBinding.instance
-            .addPostFrameCallback((_) => _scrollToCurrent());
+        // Availability only — chips need rebuild.
+        if (mounted) setState(() {});
       }
     } else if (queue.index != old.index) {
       // Only the track moved. The whole list is already here, so this is
       // pure local work — bring the new row into view, no network (§8).
       SchedulerBinding.instance.addPostFrameCallback((_) => _scrollToCurrent());
-    } else if (groupingChanged) {
-      // Availability changed without mode change — rebuild chips.
-      if (mounted) setState(() {});
     }
   }
 
@@ -469,38 +463,23 @@ class _QueueCardState extends State<QueueCard> {
   int _findCurrentDisplayIndex(List<_DisplayItem> display) {
     final int queueIndex = widget.snapshot.queue.index;
     // Prefer the row marked `now`, fallback to queue.index.
-    int targetRowIndex = -1;
-    for (final _DisplayItem item in display) {
-      if (item.isRow) {
-        if (item.row!.now) {
-          targetRowIndex = display.indexOf(item);
-          break;
-        }
-      }
+    for (int i = 0; i < display.length; i++) {
+      final _DisplayItem item = display[i];
+      if (item.isRow && item.row!.now) return i;
     }
-    if (targetRowIndex < 0) {
-      for (int i = 0; i < display.length; i++) {
-        final _DisplayItem item = display[i];
-        if (item.isRow && item.row!.index == queueIndex) {
-          targetRowIndex = i;
-          break;
-        }
-      }
+    for (int i = 0; i < display.length; i++) {
+      final _DisplayItem item = display[i];
+      if (item.isRow && item.row!.index == queueIndex) return i;
     }
     // If still not found, try to find the group containing the current index.
-    if (targetRowIndex < 0 && display.isNotEmpty) {
-      for (int i = 0; i < display.length; i++) {
-        final _DisplayItem item = display[i];
-        if (item.isGroup) {
-          final QueueGroup g = item.group!;
-          if (queueIndex >= g.start && queueIndex < g.start + g.count) {
-            targetRowIndex = i;
-            break;
-          }
-        }
+    for (int i = 0; i < display.length; i++) {
+      final _DisplayItem item = display[i];
+      if (item.isGroup) {
+        final QueueGroup g = item.group!;
+        if (queueIndex >= g.start && queueIndex < g.start + g.count) return i;
       }
     }
-    return targetRowIndex;
+    return -1;
   }
 
   void _scrollToCurrent() {

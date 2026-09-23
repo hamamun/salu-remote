@@ -154,8 +154,90 @@ class SaluPlayback {
   bool get hasSomething => hasMedia || state != TransportState.idle;
 }
 
+enum QueueGroupingMode { flat, category, language, country }
+
+QueueGroupingMode _groupingModeFrom(Object? raw) {
+  if (raw is! String) return QueueGroupingMode.flat;
+  switch (raw) {
+    case 'category':
+      return QueueGroupingMode.category;
+    case 'language':
+      return QueueGroupingMode.language;
+    case 'country':
+      return QueueGroupingMode.country;
+    case 'flat':
+    default:
+      return QueueGroupingMode.flat;
+  }
+}
+
+class SaluQueueGrouping {
+  const SaluQueueGrouping({
+    this.mode = QueueGroupingMode.flat,
+    this.available = const <QueueGroupingMode>[],
+  });
+
+  factory SaluQueueGrouping.from(Object? raw) {
+    if (raw is! Map) {
+      return const SaluQueueGrouping();
+    }
+    final Map<String, Object?> map = _map(raw);
+    final Object? availableRaw = map['available'];
+    final List<QueueGroupingMode> available = <QueueGroupingMode>[];
+    if (availableRaw is List) {
+      for (final Object? item in availableRaw) {
+        if (item is! String) continue;
+        switch (item) {
+          case 'category':
+            available.add(QueueGroupingMode.category);
+            break;
+          case 'language':
+            available.add(QueueGroupingMode.language);
+            break;
+          case 'country':
+            available.add(QueueGroupingMode.country);
+            break;
+        }
+      }
+    }
+    return SaluQueueGrouping(
+      mode: _groupingModeFrom(map['mode']),
+      available: List<QueueGroupingMode>.unmodifiable(available),
+    );
+  }
+
+  final QueueGroupingMode mode;
+  final List<QueueGroupingMode> available;
+
+  bool get isFlat => mode == QueueGroupingMode.flat;
+  bool get isGrouped => mode != QueueGroupingMode.flat;
+
+  bool isAvailable(QueueGroupingMode m) {
+    if (m == QueueGroupingMode.flat) return true;
+    return available.contains(m);
+  }
+
+  String get modeWire {
+    switch (mode) {
+      case QueueGroupingMode.flat:
+        return 'flat';
+      case QueueGroupingMode.category:
+        return 'category';
+      case QueueGroupingMode.language:
+        return 'language';
+      case QueueGroupingMode.country:
+        return 'country';
+    }
+  }
+}
+
 class SaluQueueInfo {
-  const SaluQueueInfo({this.kind = QueueKind.empty, this.count = 0, this.index = -1});
+  const SaluQueueInfo({
+    this.kind = QueueKind.empty,
+    this.count = 0,
+    this.index = -1,
+    this.grouping = const SaluQueueGrouping(),
+  });
 
   factory SaluQueueInfo.from(Object? raw) {
     final Map<String, Object?> map = _map(raw);
@@ -163,15 +245,58 @@ class SaluQueueInfo {
       kind: _enumOf<QueueKind>(QueueKind.values, map['kind'], QueueKind.empty),
       count: _i(map['count']),
       index: _i(map['index']),
+      grouping: SaluQueueGrouping.from(map['grouping']),
     );
   }
 
   final QueueKind kind;
   final int count;
   final int index;
+  final SaluQueueGrouping grouping;
 
   bool get hasRows => count > 0;
   bool get isChannels => kind == QueueKind.channels;
+}
+
+class QueueGroup {
+  const QueueGroup({
+    required this.key,
+    required this.name,
+    required this.count,
+    required this.start,
+  });
+
+  factory QueueGroup.from(Map<String, Object?> raw) => QueueGroup(
+        key: _s(raw['key']),
+        name: _s(raw['name'], 'Unknown'),
+        count: _i(raw['count']),
+        start: _i(raw['start']),
+      );
+
+  final String key;
+  final String name;
+  final int count;
+  final int start;
+}
+
+class QueueGroupsResult {
+  const QueueGroupsResult({required this.groups});
+
+  factory QueueGroupsResult.from(Map<String, Object?> raw) {
+    final Object? groupsRaw = raw['groups'];
+    final List<QueueGroup> groups = <QueueGroup>[];
+    if (groupsRaw is List) {
+      for (final Object? item in groupsRaw) {
+        if (item is Map) {
+          final Map<String, Object?> map = _map(item);
+          if (map.isNotEmpty) groups.add(QueueGroup.from(map));
+        }
+      }
+    }
+    return QueueGroupsResult(groups: List<QueueGroup>.unmodifiable(groups));
+  }
+
+  final List<QueueGroup> groups;
 }
 
 class SaluControl {

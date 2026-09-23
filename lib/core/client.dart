@@ -760,6 +760,13 @@ class SaluClient {
   /// plain sentence instead of a silent no-op.
   Future<RemoteReply> queueClear() => send('queue_clear');
 
+  // Channel grouping (`pc_part.md` §11).
+  // Old PCs answer `unknown_command` → the phone hides the chips row entirely,
+  // no error shown (that code is already in the silent set).
+  Future<RemoteReply> queueGroups() => send('queue_groups');
+  Future<RemoteReply> queueGroupSet(String by) =>
+      send('queue_group_set', args: <String, Object?>{'by': by});
+
   // Files — read-only, and only when the PC's `remote_file_access` is on.
   Future<RemoteReply> fsPlaces() => send('fs_places');
   Future<RemoteReply> fsList(

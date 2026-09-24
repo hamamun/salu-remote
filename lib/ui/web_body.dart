@@ -131,12 +131,36 @@ class _WebBodyState extends State<WebBody> {
   @override
   void didUpdateWidget(covariant WebBody oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // The page changed under us — the URL box, a tab switch, or the PC user
-    // clicking something. A player that was out of reach on the *last* page
-    // says nothing about this one, so the new page gets a fair trial.
-    if (widget.snapshot.web.url != oldWidget.snapshot.web.url && _unreachable) {
-      _unreachable = false;
-      _media = null;
+    final SaluWeb web = widget.snapshot.web;
+    final SaluWeb oldWeb = oldWidget.snapshot.web;
+
+    if (!web.hasTabs) {
+      // No tabs are open on the PC: clear the media controls, holds, and any
+      // unreachable flag immediately so no previous tab's status stays visible.
+      if (_media != null ||
+          _unreachable ||
+          _heldPosition != null ||
+          _heldVolume != null) {
+        setState(() {
+          _media = null;
+          _unreachable = false;
+          _heldPosition = null;
+          _positionHoldUntil = null;
+          _heldVolume = null;
+          _volumeHoldUntil = null;
+        });
+      }
+    } else if (web.url != oldWeb.url || web.tabs != oldWeb.tabs) {
+      // The page changed under us — a URL change, a tab switch, or tab close.
+      // Clear holds and previous media immediately; the new page gets a fresh poll.
+      setState(() {
+        _unreachable = false;
+        _media = null;
+        _heldPosition = null;
+        _positionHoldUntil = null;
+        _heldVolume = null;
+        _volumeHoldUntil = null;
+      });
       unawaited(_pollOnce());
     }
   }
@@ -177,6 +201,20 @@ class _WebBodyState extends State<WebBody> {
     try {
       final WebMediaInfo? info = await _client.webMediaRead();
       if (!mounted || info == null) return;
+      if (!info.found) {
+        // The PC confirmed there is no media right now: clear holds and
+        // reset media controls so nothing stale stays on screen.
+        final bool hadMedia = _media?.found == true;
+        _heldPosition = null;
+        _positionHoldUntil = null;
+        _heldVolume = null;
+        _volumeHoldUntil = null;
+        _unreachable = false;
+        if (hadMedia || _media != null) {
+          setState(() => _media = null);
+        }
+        return;
+      }
       // A missed beat is not news: keep the last good reading on screen.
       final bool settled = _settleHolds(info);
       if (settled || info != _media) setState(() => _media = info);
@@ -396,8 +434,10 @@ class _WebBodyState extends State<WebBody> {
   Widget build(BuildContext context) {
     final SaluWeb web = widget.snapshot.web;
     final WebMediaInfo? media = _media;
-    final bool showMedia =
-        _client.isOnline && media?.found == true && !_unreachable;
+    final bool showMedia = _client.isOnline &&
+        web.hasTabs &&
+        media?.found == true &&
+        !_unreachable;
     final bool canGoHome = _client.supportsWebHome ||
         siteHome(web.url) != null;
     return Column(
@@ -438,9 +478,19 @@ class _WebBodyState extends State<WebBody> {
         WebTabsCard(
           snapshot: widget.snapshot,
           onNewTab: () => unawaited(_urlDialog(newTab: true)),
-          // Another tab is in front now: the player the seek bar was reading a
-          // moment ago is not the player on screen.
-          onTabChanged: () => unawaited(_pollOnce()),
+          // Another tab is in front now: reset holds and media immediately,
+          // then poll the new tab's media.
+          onTabChanged: () {
+            setState(() {
+              _media = null;
+              _unreachable = false;
+              _heldPosition = null;
+              _positionHoldUntil = null;
+              _heldVolume = null;
+              _volumeHoldUntil = null;
+            });
+            unawaited(_pollOnce());
+          },
         ),
       ],
     );
@@ -457,45 +507,54 @@ class _WebBodyState extends State<WebBody> {
   /// Home is an *addition*, not a replacement (user's own words): nothing that
   /// worked here before has been taken away.
   Widget _navRow(SaluWeb web, {required bool canGoHome}) {
+    final bool hasTabs = web.hasTabs;
+    final bool canBack = hasTabs && web.canBack;
+    final bool canForward = hasTabs && web.canForward;
+    final bool canReload = hasTabs;
+    final bool homeActive = hasTabs && canGoHome;
     return Row(
       children: <Widget>[
         IconButton(
           tooltip: 'Home',
-          onPressed: canGoHome ? () => unawaited(_goHome()) : null,
+          onPressed: homeActive ? () => unawaited(_goHome()) : null,
           icon: Icon(
             Icons.home_outlined,
-            color: canGoHome ? AppColors.iconIdle : AppColors.statusUnknown,
+            color: homeActive ? AppColors.iconIdle : AppColors.statusUnknown,
           ),
         ),
         IconButton(
           tooltip: 'Back',
-          onPressed: web.canBack
+          onPressed: canBack
               ? () => unawaited(runRemote(context, () => _client.browserNav('back')))
               : null,
           icon: Icon(Icons.arrow_back,
-              color: web.canBack ? AppColors.iconIdle : AppColors.statusUnknown),
+              color: canBack ? AppColors.iconIdle : AppColors.statusUnknown),
         ),
         IconButton(
           tooltip: 'Forward',
-          onPressed: web.canForward
+          onPressed: canForward
               ? () =>
                   unawaited(runRemote(context, () => _client.browserNav('forward')))
               : null,
           icon: Icon(Icons.arrow_forward,
               color:
-                  web.canForward ? AppColors.iconIdle : AppColors.statusUnknown),
+                  canForward ? AppColors.iconIdle : AppColors.statusUnknown),
         ),
         IconButton(
-          tooltip: web.loading ? 'Stop' : 'Reload',
-          onPressed: () => unawaited(
-            runRemote(
-              context,
-              () => _client.browserNav(web.loading ? 'stop' : 'reload'),
-            ),
-          ),
+          tooltip: !hasTabs
+              ? 'Reload'
+              : (web.loading ? 'Stop' : 'Reload'),
+          onPressed: canReload
+              ? () => unawaited(
+                  runRemote(
+                    context,
+                    () => _client.browserNav(web.loading ? 'stop' : 'reload'),
+                  ),
+                )
+              : null,
           icon: Icon(
-            web.loading ? Icons.stop : Icons.refresh,
-            color: AppColors.iconIdle,
+            web.loading && hasTabs ? Icons.stop : Icons.refresh,
+            color: canReload ? AppColors.iconIdle : AppColors.statusUnknown,
           ),
         ),
         IconButton(
@@ -511,7 +570,7 @@ class _WebBodyState extends State<WebBody> {
           ),
         ),
         const Spacer(),
-        if (web.loading)
+        if (web.loading && hasTabs)
           const Padding(
             padding: EdgeInsets.only(right: 8),
             child: SizedBox(
@@ -555,26 +614,31 @@ class _WebBodyState extends State<WebBody> {
   /// The live page: title over URL. Tap = the URL box (§4.2's sleeper
   /// feature); long-press = the diagnostics sheet, which is where a question
   /// about what the PC actually sent gets answered by looking.
+  /// When no tab is open on the PC, shows "No tab open" and omits the URL.
   Widget _pageCard(SaluWeb web) {
+    final bool hasTabs = web.hasTabs;
+    final String titleText = hasTabs ? (web.title ?? 'Loading…') : 'No tab open';
+    final String? urlText = hasTabs ? web.url : null;
+
     return InkWell(
       borderRadius: BorderRadius.circular(18),
-      onTap: () => unawaited(_urlDialog()),
+      onTap: () => unawaited(_urlDialog(newTab: !hasTabs && _client.supportsWebTabs)),
       onLongPress: () => unawaited(_openDiagnostics()),
       child: SaluCard(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             Text(
-              web.title ?? 'Loading…',
+              titleText,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.titleMedium,
             ),
-            if (web.url != null)
+            if (urlText != null)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
-                  web.url!,
+                  urlText,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.bodySmall,

@@ -346,12 +346,14 @@ class SaluWeb {
     this.canForward = false,
     this.loading = false,
     this.tabs = 0,
+    this.tabsKnown = false,
     this.fullscreen = false,
     this.hasMedia = false,
   });
 
   factory SaluWeb.from(Object? raw) {
     final Map<String, Object?> map = _map(raw);
+    final bool hasTabsField = map.containsKey('tabs');
     return SaluWeb(
       title: _sn(map['title']),
       url: _sn(map['url']),
@@ -359,6 +361,7 @@ class SaluWeb {
       canForward: _b(map['canForward']),
       loading: _b(map['loading']),
       tabs: _i(map['tabs']),
+      tabsKnown: hasTabsField,
       fullscreen: _b(map['fullscreen']),
       hasMedia: _b(map['hasMedia']),
     );
@@ -370,11 +373,21 @@ class SaluWeb {
   final bool canForward;
   final bool loading;
   final int tabs;
+
+  /// Whether the snapshot explicitly reported the browser's tab count.
+  /// When true, [tabs] == 0 confirms there are no open tabs on the PC.
+  final bool tabsKnown;
+
   final bool fullscreen;
 
   /// A boolean only — the page player's position never rides the snapshot
   /// (`remote.md` §17.5). The phone asks with `web_media_get` when it wants it.
   final bool hasMedia;
+
+  /// Whether any tabs are open on the PC browser. When [tabsKnown] is true,
+  /// [tabs] > 0 is authoritative. Otherwise falls back to whether a title or
+  /// URL is present.
+  bool get hasTabs => tabsKnown ? tabs > 0 : (title != null || url != null);
 }
 
 class SaluTracks {
@@ -1096,6 +1109,9 @@ class WebMediaInfo {
     this.dialect = WebMediaDialect.contract,
     this.raw = const <String, Object?>{},
   });
+
+  /// The empty reading — no media found on the active page or tab.
+  static const WebMediaInfo none = WebMediaInfo(found: false);
 
   /// [contractUnits] is the PC's own promise — `web_media_unit` in
   /// `hello.features` — and outranks everything except an explicit `unit`

@@ -70,11 +70,6 @@ class _MousePadState extends State<MousePad> {
   /// in the one line instead of pressing into the dark.
   bool _refused = false;
 
-  /// The pad's own shape — a laptop trackpad's proportion. Its *size* comes
-  /// from whatever room the tab has left (see [build]), so the box is as large
-  /// as the screen allows and never scrolls.
-  static const double _aspect = 1.5;
-
   bool get _mouse => _client.supportsWebMouse && !_refused;
 
   @override
@@ -169,21 +164,24 @@ class _MousePadState extends State<MousePad> {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
-        // The line under the pad plus its gap, reserved before the box is
-        // sized — so the pad always fits the tab without anything scrolling.
-        const double caption = 26;
-        final double room = constraints.maxHeight.isFinite
+        // Dynamic sizing:
+        // Height = 70% of phone's full screen height, clamped to available room
+        // Width  = 100% of the screen width
+        // Caption = 26 dp reserved for the "Mouse" line underneath
+        final double screenHeight = MediaQuery.sizeOf(context).height;
+        final double screenWidth = MediaQuery.sizeOf(context).width;
+        const double caption = 26.0;
+        final double maxRoom = constraints.maxHeight.isFinite
             ? (constraints.maxHeight - caption).clamp(60.0, double.infinity)
-            : 260.0;
-        final double width = constraints.maxWidth.isFinite
+            : (screenHeight > 0 ? screenHeight * 0.70 : 260.0);
+        final double targetHeight =
+            screenHeight > 0 ? screenHeight * 0.70 : 260.0;
+        final double padHeight =
+            targetHeight > maxRoom ? maxRoom : targetHeight;
+        final double padWidth = constraints.maxWidth.isFinite
             ? constraints.maxWidth
-            : 320.0;
-        double padWidth = width;
-        double padHeight = padWidth / _aspect;
-        if (padHeight > room) {
-          padHeight = room;
-          padWidth = padHeight * _aspect;
-        }
+            : (screenWidth > 0 ? screenWidth : 320.0);
+
         return Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[

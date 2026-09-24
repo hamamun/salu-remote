@@ -291,6 +291,10 @@ history and its own last-tab rule.
 
 Shared rules:
 
+- **When no tab is open on the PC** (`web.tabs == 0`): the page card says *"No tab open"*
+  without a URL; Back, Forward, Reload and Home are disabled; Fullscreen stays enabled
+  (the PC window can still fullscreen); and the media play bar (seek, play/pause, volume)
+  and any optimistic holds are immediately cleared.
 - The transport rows **disappear** in both shapes instead of sitting there dead. Dead
   buttons are the fastest way to make an app feel broken.
 - **Web-media controls drive the page's own player** (JavaScript on the PC side — see
@@ -300,11 +304,12 @@ Shared rules:
   §17.4, with the phone reading the units off the reply until the PC promises
   `web_media_unit`. A wrong unit here is invisible in every other control and total in
   these two, which is why the diagnostics sheet exists.
-- **When the page's player cannot be reached** (player inside a cross-origin iframe, or
-  DRM), the phone shows one plain line — *"This site's player can't be controlled from
-  outside."* — and drops back to the nav shape. Hidden beats broken, every time. That
-  verdict belongs to **the page**, not to the session: navigating anywhere (the URL box, a
-  tab switch, the PC user clicking something) gives the next page a fresh trial.
+- **When the page's player cannot be reached or no media is found**: `web_media_get`
+  answering `no_web_media` during poll clears media controls immediately back to the
+  nav shape. A failed *control write* (`no_web_media` on a tap) shows one plain line —
+  *"This site's player can't be controlled from outside."* — indicating cross-origin or
+  DRM restrictions. Switching tabs, opening a new tab or closing a tab clears media
+  and holds immediately so no previous tab's playback lingers.
 - **The open tabs are a section, not a button** (user, 2026-09-24). The list, the switching,
   the closing and the new tab are built on the phone and specified for the PC in `remote.md`
   §17.13; the section is collapsible and remembers its state like the queue card, and until a
@@ -426,12 +431,22 @@ pointer**, which is the thing that can reach everything on it.
 ```
 ┌────────────────────────────────┐
 │                                │
-│          the trackpad          │ ← drag here; the PC's cursor follows
-│       (round-cornered box)      │
+│          the trackpad          │ ← 100% screen width, 70% screen height
+│       (round-cornered box)     │   dynamic sizing, thin border (1.4 dp)
 │                                │
 └────────────────────────────────┘
               Mouse                ← the one line, and nothing else
 ```
+
+**Sizing and shape (dynamic):**
+- **Width:** 100% of the screen width (`constraints.maxWidth`).
+- **Height:** 70% of the phone's full screen height (`screenHeight * 0.70`),
+  capped dynamically to the tab's available height minus the 26 dp caption reservation
+  so that smaller phones and landscape orientation never scroll or clip.
+- **Corners and border:** Keeps rounded corners (`18 dp`) and a thin border (`1.4 dp`),
+  maintaining the clean laptop-trackpad card appearance.
+- **Caption:** Preserves the `"Mouse"` line right underneath the pad (and the PC update
+  notice when `web_mouse` is unadvertised).
 
 | Gesture | Does | Verb |
 |---|---|---|

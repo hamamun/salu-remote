@@ -84,12 +84,10 @@ class _TuneTabState extends State<TuneTab> {
       // track, no audio track. What there is, is a page — and a pointer for it.
       //
       // No scroll view: the tab holds exactly one thing, the pad sizes itself
-      // to whatever room is left (`MousePad`), and a scrolling parent would
-      // only fight the pad's own drag for the gesture arena.
-      return const Padding(
-        padding: EdgeInsets.fromLTRB(16, 8, 16, 20),
-        child: MousePad(),
-      );
+      // dynamically to 100% screen width and 70% screen height (`MousePad`),
+      // and a scrolling parent would only fight the pad's own drag for the
+      // gesture arena.
+      return const MousePad();
     }
     if (snapshot.nothingPlaying) {
       return ListView(

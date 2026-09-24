@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 
 import '../core/client.dart';
 import '../core/deep_link.dart';
+import '../core/error_copy.dart';
 import '../core/models.dart';
 import '../core/prefs.dart';
+import '../core/reply.dart';
 import '../core/screen.dart';
 import 'browse_tab.dart';
 import 'connect_sheet.dart';
@@ -30,7 +32,7 @@ class RootPage extends StatefulWidget {
   State<RootPage> createState() => _RootPageState();
 }
 
-enum _MenuItem { settings, forget }
+enum _MenuItem { settings, forget, sleep, shutdown }
 
 class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
   final SaluClient _client = SaluClient.instance;
@@ -41,6 +43,7 @@ class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
   final ValueNotifier<int> _activeTab = ValueNotifier<int>(0);
   int _tab = 0;
   bool _focus = false;
+  bool _powerPending = false;
 
   LinkState _lastLink = LinkState.idle;
 
@@ -168,6 +171,84 @@ class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
     }
   }
 
+  bool get _canUsePower =>
+      !_powerPending && _client.isOnline && _client.supportsPcPower;
+
+  Future<void> _requestPower({required bool sleep}) async {
+    if (!_canUsePower) return;
+    final ServerInfo? target = _client.server.value;
+    final String name = target?.shortName ?? 'your PC';
+    final String? host = _client.host;
+    final int? port = _client.port;
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: Text(sleep ? 'Put $name to sleep?' : 'Shut down $name?'),
+        content: Text(
+          sleep
+              ? 'The remote will disconnect while the PC sleeps. It will reconnect when the PC wakes.'
+              : 'Save your work on the PC first. It will turn off and cannot be turned back on from this remote.',
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: sleep
+                ? null
+                : FilledButton.styleFrom(backgroundColor: AppColors.statusDead),
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(sleep ? 'Sleep PC' : 'Shut down PC'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+
+    // A QR/deep link or a reconnect can replace the PC while the dialog is up.
+    // Never send a destructive command to a different connection than the one
+    // whose name the user just confirmed.
+    if (!_canUsePower ||
+        !identical(_client.server.value, target) ||
+        _client.host != host ||
+        _client.port != port) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('The PC connection changed. Open the menu and try again.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _powerPending = true);
+    try {
+      // Exactly one command, never retried automatically: a lost reply does
+      // not tell us whether Windows has already accepted the request.
+      final RemoteReply reply =
+          await (sleep ? _client.sleepPc() : _client.shutDownPc());
+      if (!mounted) return;
+      final String message;
+      if (reply.ok) {
+        message = sleep
+            ? 'Sleep requested. The remote will reconnect when the PC wakes.'
+            : 'Shut down requested. Turn the PC on manually to reconnect.';
+      } else if (reply.code == 'offline' || reply.code == 'timeout') {
+        message = 'The PC did not confirm the request. Check the PC before trying again.';
+      } else if (reply.code == 'unknown_command') {
+        message = 'This PC does not support remote power controls yet.';
+      } else {
+        message = RemoteErrorCopy.of(reply);
+      }
+      final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(SnackBar(content: Text(message)));
+    } finally {
+      if (mounted) setState(() => _powerPending = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -292,24 +373,64 @@ class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
             case _MenuItem.forget:
               unawaited(_forget());
               break;
+            case _MenuItem.sleep:
+              unawaited(_requestPower(sleep: true));
+              break;
+            case _MenuItem.shutdown:
+              unawaited(_requestPower(sleep: false));
+              break;
           }
         },
-        itemBuilder: (BuildContext context) => const <PopupMenuEntry<_MenuItem>>[
-          PopupMenuItem<_MenuItem>(
-            value: _MenuItem.settings,
-            child: ListTile(
-              leading: Icon(Icons.settings_outlined),
-              title: Text('Settings'),
+        itemBuilder: (BuildContext context) {
+          // Re-evaluate when the menu opens: `hello` and the link may have
+          // changed without rebuilding the app bar. Keep the two seats visible
+          // but inert on an offline or older PC.
+          final bool enabled = _canUsePower;
+          return <PopupMenuEntry<_MenuItem>>[
+            const PopupMenuItem<_MenuItem>(
+              value: _MenuItem.settings,
+              child: ListTile(
+                leading: Icon(Icons.settings_outlined),
+                title: Text('Settings'),
+              ),
             ),
-          ),
-          PopupMenuItem<_MenuItem>(
-            value: _MenuItem.forget,
-            child: ListTile(
-              leading: Icon(Icons.link_off),
-              title: Text('Forget this PC'),
+            const PopupMenuItem<_MenuItem>(
+              value: _MenuItem.forget,
+              child: ListTile(
+                leading: Icon(Icons.link_off),
+                title: Text('Forget this PC'),
+              ),
             ),
-          ),
-        ],
+            const PopupMenuDivider(),
+            PopupMenuItem<_MenuItem>(
+              value: _MenuItem.sleep,
+              enabled: enabled,
+              child: ListTile(
+                enabled: enabled,
+                leading: const Icon(Icons.bedtime_outlined),
+                title: const Text('Sleep PC'),
+              ),
+            ),
+            PopupMenuItem<_MenuItem>(
+              value: _MenuItem.shutdown,
+              enabled: enabled,
+              child: ListTile(
+                enabled: enabled,
+                leading: const Icon(Icons.power_settings_new),
+                title: const Text('Shut down PC'),
+              ),
+            ),
+            if (_client.isOnline && !_client.supportsPcPower)
+              const PopupMenuItem<_MenuItem>(
+                enabled: false,
+                height: 48,
+                child: Text(
+                  'Power controls need an updated SALU on the PC.',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ),
+          ];
+        },
       ),
     ];
   }

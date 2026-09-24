@@ -32,6 +32,8 @@ The current build contains the full v2 scope:
     box and one line under it. Drag moves SALU's own cursor, a tap is a left
     click, a double tap is Enter;
 - **focus mode** — Play with only the essential controls, one gesture away;
+- **Sleep PC** and **Shut down PC** in the three-dot menu (both require confirmation,
+  remain disabled while offline or until SALU on the PC advertises `pc_power`);
 - the **connect sheet** (QR / manual / paste, diagnostics, remember me),
   **settings** (phone name + the show/hide checklist), reconnect to a
   remembered PC, live playback state and connection feedback from the PC.
@@ -48,8 +50,13 @@ on the PC is **feature-flagged**, so it lights up the moment SALU advertises
 `web_media_unit`, `web_tabs`, `web_bookmarks`, `web_key`, `web_home`, `web_fullscreen`,
 `web_mouse` and `web_bookmark_add` — and until then each door degrades into something useful
 rather than something dead. [`pc_part.md`](pc_part.md) is the work order for that side
-(**Part C** is the current one); `remote.md` §17.13 and §17.14 are the protocol it
-implements.
+(Part C); `remote.md` §17.13 and §17.14 are the protocol it implements.
+
+**Power actions also need a PC update.** This repository is the Android client only.
+The menu and wire commands are ready, but Sleep PC / Shut down PC stay disabled until
+SALU for Windows implements `pc_sleep` / `pc_shutdown` and advertises `pc_power`.
+The PC-side work order is [`pc_part.md` Part D](pc_part.md), with its protocol in
+[`remote.md` §17.15](remote.md).
 
 ## Run from Android Studio
 

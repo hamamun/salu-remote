@@ -1533,4 +1533,8 @@ abstract final class RemoteFeature {
     webMouse,
     webBookmarkAdd,
   ];
+
+  /// Both authenticated PC power verbs (`pc_sleep`, `pc_shutdown`) work.
+  /// Not a Web diagnostics feature; older PCs keep the menu items disabled.
+  static const String pcPower = 'pc_power';
 }

@@ -16,19 +16,21 @@ The current build contains the full v2 scope:
     realtime seek/volume sliders (they fire while dragging), mute + volume,
     the now-playing/queue card (tap a row to jump, ✕ clears the playlist),
     the mode pill, and — in web mode — the **web body**: a nav row
-    (back · forward · reload · fullscreen · the tab door), the page doors
-    (**＋ New tab** · **☆ Saved pages**), and the page player's own controls
-    (live seek bar, −10 s / +10 s, the big play/pause, live volume + mute,
-    page fullscreen). Long-press the page card for **Web diagnostics** — what
+    (home · back · forward · reload · one fullscreen seat the PC decides the
+    target of), the page doors (**＋ New tab** · **☆ Saved pages** — the PC
+    browser's bookmarks, and nothing else), the **Open tabs** section at the
+    foot (collapsible, remembered, exactly the queue card's shape), and the page
+    player's own controls (live seek bar, −10 s / +10 s, the big play/pause,
+    live volume + mute). Long-press the page card for **Web diagnostics** — what
     the PC reported, in its own numbers;
   - **Browse** — Files (PC's own file tree, read-only) and Streams (saved
     streams with the PC's health verdict), greyed out while the PC is in web
     mode;
   - **Tune** — Equalizer (the PC's presets and curve, drag a band, speed
     chips), Subtitles (tracks, delay, search, file picker, auto-download) and
-    Audio tracks; in web mode the tab becomes a **D-pad** that draws only the
-    keys the PC answers (▲▼ · OK · Esc when it advertises `web_key`, ◀▶
-    everywhere) and names whatever the page has focused;
+    Audio tracks; in web mode the tab becomes a **mouse pad** — one trackpad
+    box and one line under it. Drag moves SALU's own cursor, a tap is a left
+    click, a double tap is Enter;
 - **focus mode** — Play with only the essential controls, one gesture away;
 - the **connect sheet** (QR / manual / paste, diagnostics, remember me),
   **settings** (phone name + the show/hide checklist), reconnect to a
@@ -38,14 +40,16 @@ The Android permissions, API level, screen-awake channel and persistence depende
 already applied in this checkout. `flutter pub get` before the first run — the QR scanner
 added one dependency (`mobile_scanner`).
 
-**Waiting on the PC (2026-09-23).** The web section is complete on this side: live seek and
-volume bars with an optimistic hold, −10 s / +10 s, the tab door (list · switch · close ·
-new), Saved pages (save the current page, the PC's bookmarks, SALU's URL library), the
-Web diagnostics sheet and the D-pad. Everything that needs new plumbing on the PC is
-**feature-flagged**, so it lights up the moment SALU advertises `web_media_unit`,
-`web_tabs`, `web_bookmarks` and `web_key` — and until then each door degrades into
-something useful rather than something dead. [`pc_part.md`](pc_part.md) is the work order
-for that side; `remote.md` §17.13 is the protocol it implements.
+**Waiting on the PC (2026-09-24).** The web section is complete on this side: live seek and
+volume bars with an optimistic hold, −10 s / +10 s, the Home seat, one fullscreen seat, the
+**Open tabs** section (list · switch · close · new), Saved pages (the PC browser's bookmarks,
+with add-only saving), Web diagnostics and the mouse pad. Everything that needs new plumbing
+on the PC is **feature-flagged**, so it lights up the moment SALU advertises
+`web_media_unit`, `web_tabs`, `web_bookmarks`, `web_key`, `web_home`, `web_fullscreen`,
+`web_mouse` and `web_bookmark_add` — and until then each door degrades into something useful
+rather than something dead. [`pc_part.md`](pc_part.md) is the work order for that side
+(**Part C** is the current one); `remote.md` §17.13 and §17.14 are the protocol it
+implements.
 
 ## Run from Android Studio
 

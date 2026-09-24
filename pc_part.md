@@ -7,17 +7,224 @@
 > sandbox the phone side was written in has **no Flutter SDK**, so `flutter analyze` and
 > `flutter test` have not been run on it yet. Do that first.
 
-Two work orders live in this file:
+Three work orders live in this file:
 
 | Part | Date | What | Status |
 |---|---|---|---|
-| **A** | 2026-09-23 | **The web section** — page-player units (the reported bug), the right media element, `web_key` + the focus ring, the tab strip mirror (list · switch · close · new), the bookmark mirror | **live — do this one** |
+| **C** | 2026-09-24 | **The web fixes the user reported after using it** — one fullscreen seat that actually works (`web_fullscreen` + the gesture problem), Home, the trackpad (`web_mouse_move` / `web_mouse_click`), add-only bookmarks, and the blank new tab | **live — do this one first** |
+| **A** | 2026-09-23 | **The web section** — page-player units (the reported bug), the right media element, `web_key` + the focus ring, the tab strip mirror (list · switch · close · new), the bookmark mirror | live; still needed (C builds on it) |
 | **B** | 2026-09-22 | The `fs_places` drive scan (§1–9), the group-by pill bug (§10), channel grouping (§11), phone-local channel favourites (§12, a record, no PC work) | unchanged, kept below |
 
 The protocol for Part A is already written into the phone repo's `remote.md` — **§17.4**
 (verbs and units), **§17.11** (the web-media bridge) and **§17.13** (tabs, bookmarks,
 focus, feature flags). The phone-side UI spec is `remote_apk_ui.md` §4.2, §6.0 and §8.
 Read §17.13 once before starting: it is the contract, and this part is the shopping list.
+Part C's contract is **§17.14**, and its shopping list is Part C below.
+
+**Part C and Part A are not alternatives.** A3–A5 (the focus keys, the tab mirror, the
+bookmark mirror) are what Part C's new verbs lean on: `web_fullscreen` clicks the page's own
+fullscreen control, `web_mouse_click` clicks wherever the pointer is, and `web_bookmark_add`
+needs the bookmark store A5 already reads. Do A first if it is not in yet; C then needs no
+rework.
+
+---
+
+# Part C — the web fixes the user reported after using it (2026-09-24)
+
+> Phone side: **already built** in `hamamun/salu-remote` (`lib/ui/web_body.dart`,
+> `lib/ui/web_tabs_card.dart`, `lib/ui/mouse_pad.dart`, `lib/ui/web_sheets.dart`,
+> `lib/core/web_url.dart`, `lib/core/client.dart`, `lib/core/models.dart`). Every piece below
+> degrades to the phone's current behaviour while the PC has not caught up, so this part can
+> land in any order — but the order written here is the order the user will feel it in.
+>
+> Contract: `remote.md` **§17.14**. This file is the shopping list.
+
+## C0. What the user reported, in their words
+
+| # | Complaint | Where it lives |
+|---|---|---|
+| 1 | *"fullscreen button making salu fullscreen for other video stream except youtube which is not getting fullscreen"* | **PC** (C1) — one seat must try the page's player first, and the injected fullscreen call needs a real gesture |
+| 2 | *"at previous page icon place home icon which bring current loaded page to its homepage as salu do"* | **PC** (C2) + phone (built) |
+| 3 | *"open tab … below volume bar … heading 'open tab' … collapse/expand like queue"* | phone only (built — `web_tabs_card.dart`) |
+| 4 | *"when i am typing url then press open tab its opening blank tab"* | phone (built — `web_url.dart` adds the scheme) **and PC** (C5 — `web_tab_new` must navigate inside the new tab) |
+| 5 | *"web saved pages … also showing m3u list from player section … only bookmark should show"* | phone only (built — the sheet lists bookmarks alone) |
+| 6 | Tune tab, Web mode: the D-pad out, a laptop-style **trackpad** in — *"by touching there will activate mouse at salu and double tap will be enter"* | **PC** (C3) + phone (built — `mouse_pad.dart`) |
+
+Everything the phone needed for 3, 5 and half of 4 is done and testable today. 1, 2, 3's tail
+(`web_tabs_get`), 4's tail, 6 and the bookmark half of 5 need code in `hamamun/Salu`.
+
+## C1. One fullscreen seat that actually works — `web_fullscreen`
+
+**Read `remote.md` §17.14.1 first.** The short version: the phone now sends **one** verb and
+the PC picks the target, in this order.
+
+**File: `lib/core/remote/remote_web_media_bridge.dart`** (the §17.11 bridge) gains a
+fullscreen **plan**, not just a script injection:
+
+1. **Try the element.** If the §17.11 find-script found a player, request fullscreen on its
+   container (`el.requestFullscreen?.() ?? el.webkitRequestFullscreen?.()`, wrapped in the
+   house try/catch), then **read back** whether it took: `document.fullscreenElement` (or
+   `document.webkitFullscreenElement`) plus `el.webkitDisplayingFullscreen`. WebView2 will
+   refuse a `requestFullscreen()` with no user activation, and a refusal is silent — the
+   read-back is the only way to know.
+2. **If it did not take, use a real input click.** Ask the page for the *player's own*
+   fullscreen control — the standard order: `[aria-label*="fullscreen" i]`,
+   `.fullscreen-button`, `button[title*="fullscreen" i]`, `video::-webkit-media-controls-fullscreen-button`'s
+   owner if it is reachable, and finally the largest visible button inside the player
+   container — return its `getBoundingClientRect()`, convert to screen coordinates, and fire a
+   **real** click through the PC's simulated-input path at that point. **This is the fix for
+   YouTube**: a real click *is* user activation, so YouTube's own button does what the
+   injected call could not.
+3. **If the page has no reachable player** (the find-script says `found:false`, or it is a
+   cross-origin iframe), fall back to `WindowStateService.instance.toggleFullscreen()` and
+   report `target:"window"`. That is today's behaviour — kept, but only as the *last* choice,
+   never instead of trying the page's player.
+4. **`on:false` always leaves**: exit element fullscreen if it is on, then the window's. A
+   seat that cannot un-fullscreen is worse than one that cannot fullscreen.
+
+**File: `lib/ui/browser/…` (wherever the WebView2 host lives).** `ContainsFullScreenElement`
+is the host's duty: when it becomes true, SALU must make its window fill the screen itself;
+when it becomes false, it must put the window back. A page that enters fullscreen while the
+host does nothing *looks exactly like the bug the user reported*. Bind the event, drive the
+window from it, and let Esc (the phone's `web_key {key:"Escape"}` and the PC's own key) leave
+the way it already does.
+
+**Handlers.** `remote_command_handler.dart` gains `web_fullscreen`:
+
+```
+web_fullscreen  {on?}  →  ack {fullscreen: <bool>, target: "page" | "window"}
+```
+
+**`web_media_get`** gains `fullscreen: <bool>` — the element's state **now** (the phone's mark
+reads it so the icon is never a guess). `canFull` keeps meaning *possible*.
+
+Then **advertise `web_fullscreen`** in `hello.features`.
+
+## C2. Home — `browser_nav {action:"home"}`
+
+`browser_nav` already routes through the bridge the screen installs (§17.7). Add the action:
+
+- **What it does:** SALU's own home page if the browser has one configured; otherwise the
+  **origin of the active tab's URL**, loaded **in that same tab** (`https://www.youtube.com/watch?v=…`
+  → `https://www.youtube.com`). Same tab matters — this is the button that takes a video page
+  back to the site's front page, not a second window.
+- **Nothing to go home to** (`about:blank`, a `file://` page): `ack`, no navigation. Not an
+  error, and no error code for it.
+- **Unknown action** keeps answering `invalid_arguments` (the phone then falls back to
+  `browser_open` with the origin it computes itself — the seat still works on this PC, maybe
+  with a new tab).
+- **Advertise `web_home`** when it is implemented.
+
+## C3. The trackpad — `web_mouse_move` / `web_mouse_click`
+
+The phone's Tune tab is now a trackpad and one line (`mouse_pad.dart`). It sends, and expects
+the PC to obey:
+
+| Verb | Args | Meaning |
+|---|---|---|
+| `web_mouse_move` | `{dx, dy}` | move the **PC's own pointer** by exactly this much, relative, in CSS pixels at the WebView's scale |
+| `web_mouse_click` | `{button:"left"\|"right"\|"middle", count:1\|2}` | a real click at the pointer's current position |
+
+**Implementation, new file `lib/core/remote/remote_input_service.dart`:**
+
+1. **Absolute mouse events are not an option.** `SendInput` (or `mouse_event` where SendInput
+   is unavailable) with `MOUSEEVENTF_MOVE` **without** `MOUSEEVENTF_ABSOLUTE`, so the PC's
+   normal cursor acceleration is applied the way the user expects for a real mouse. The phone
+   has already applied its own gain (2.5×) and clamped each packet to ±320 px — **do not add
+   acceleration of your own on top**; two gains is a pointer that overshoots everything.
+2. **Clicks are real clicks** at wherever the pointer stands (`MOUSEEVENTF_LEFTDOWN` +
+   `LEFTUP`, `count` times with the system's double-click interval between). Injecting
+   `element.click()` in the page is *not* an implementation of this verb: the entire point of
+   a pointer is that it works on canvas players, video overlays and DOM buttons alike.
+3. **Non-blocking by construction.** 25 of these arrive per second while a thumb moves. The
+   handler must move the pointer and ack; it must never await anything page-side.
+4. **`no_web_mouse`** when the pointer genuinely cannot be delivered (no injectable input, a
+   locked session). **Advertise `web_mouse`** only when both verbs work — a flag that answers
+   `unknown_command` puts a sentence under the user's trackpad.
+
+**Pointer visibility.** In fullscreen the Windows cursor hides itself; a trackpad with no
+visible pointer is unusable. While a phone is connected in Web mode and the pad is in use,
+make sure SALU shows its cursor over the WebView (the PC already has the machinery —
+`SettingsService`'s `mouseOverPreview` and the OSC's own cursor handling are the neighbours to
+look at). This is part of C3, not a nicety: it is the only feedback the user gets.
+
+**Rate.** Movement is ~25 cmd/s; the per-device budget is 30/s (§6.2) and the phone's own
+web-media poll is 1/s. Leave the budget alone rather than raising it — the phone's batching is
+what keeps this inside it.
+
+## C4. Add-only bookmarks — `web_bookmark_add`
+
+☆ Saved pages is bookmarks only now, so **Save this page** has to land in that list to be
+worth anything.
+
+```
+web_bookmark_add  {url, name?}  →  ack   (errors: no_web_bookmarks, invalid_arguments)
+```
+
+- **Append only.** No rename, no delete, no reorder, no sync. A URL already in the store is a
+  no-op, not a duplicate (§17.13.4's rule is unchanged — it is about *rewriting*, and this verb
+  cannot rewrite anything).
+- Write where A5 already reads: the browser's own bookmark store, at the top level (`folder`
+  stays empty for phone-added entries).
+- If the browser has no bookmark store, do not advertise `web_bookmark_add` and do not
+  advertise `web_bookmarks`; the phone then saves into SALU's list and says so in its snackbar.
+- **Advertise `web_bookmark_add`** when it is implemented.
+
+## C5. The blank new tab — `web_tab_new {url}`
+
+The phone now sends a scheme with every typed address (`web_url.dart`: "youtube.com" →
+"https://youtube.com"), which removes the most common cause. The remaining one is the PC's:
+
+- `web_tab_new {url}` must **create the tab and navigate it**, not create an empty one and
+  hope. The order that works with the existing strip: the screen's own add-tab (so the strip,
+  the session and the handlers all see it) → set the new tab's URL → make it active → `ack
+  {index}`. If the URL cannot be loaded at all, answer `invalid_arguments` rather than leaving
+  the user on a blank page.
+- A URL with no scheme that still slips through (a third-party client, a paste from somewhere
+  odd) should be treated the way SALU's own Open-URL modal treats it — that modal already
+  knows.
+
+## C6. Housekeeping, tests, and the phone-side file list
+
+1. **`hello.features`** gains, truthfully and only when implemented: `web_home`,
+   `web_fullscreen`, `web_mouse`, `web_bookmark_add`. `proto` stays **1**.
+2. **`RemoteErrorCode`** gains `no_web_mouse`. Mirror it into
+   `salu-remote/lib/protocol/remote_protocol.dart` in the same sitting — the two copies are
+   one file with two addresses, and the phone's user-facing copy for it already exists
+   (`lib/core/error_copy.dart`).
+3. **The phone's spec copy is already updated**: `remote.md` §17.4 (the verb tables),
+   §17.5 (`web_media_get`'s `fullscreen`), §17.13 (the superseded-in-part note) and the new
+   **§17.14**. `remote_apk_ui.md` §4.2 and §6.0 follow the new shapes.
+4. **Files touched on the phone side** (for anyone reading a diff across both repos):
+   `lib/core/web_url.dart` (**new**), `lib/ui/web_tabs_card.dart` (**new**),
+   `lib/ui/mouse_pad.dart` (**new**, replacing `lib/ui/dpad.dart`, which is deleted),
+   `lib/ui/web_body.dart`, `lib/ui/web_sheets.dart`, `lib/ui/tune_tab.dart`,
+   `lib/core/client.dart`, `lib/core/models.dart`, `lib/core/error_copy.dart`,
+   `test/web_url_test.dart` (**new**), `test/web_media_test.dart`.
+5. **PC-side tests to add** (`test/remote_web_fullscreen_test.dart`,
+   `test/remote_mouse_test.dart`, `test/remote_bookmarks_test.dart`):
+   - fullscreen: target selection (player present → `page`; absent → `window`);
+     `requestFullscreen` refused → the real-input fallback is used; `on:false` leaves both;
+     the ack's `target` matches what actually happened; `web_media_get` reports `fullscreen`.
+   - mouse: relative movement math (a `dx`/`dy` pair moves the pointer by that much, twice in
+     a row adds up); click count 1 vs 2; a `middle`/`right` button; `no_web_mouse` when the
+     injector is unavailable; the handler never awaits page-side work.
+   - bookmarks: append adds one entry; the same URL twice adds one; nothing else in the store
+     changes; an unadvertised PC answers `unknown_command` for the verb (which is what the
+     phone's fallback tests against).
+6. **Acceptance, on the user's own PC, in this order** (this is the list to hand to them):
+   1. YouTube video → press fullscreen on the phone → **the video fills the screen** (not the
+      bare app window), and the icon becomes the exit mark. Press again → it leaves.
+   2. A site with no player → press fullscreen → the SALU window goes fullscreen, exactly once,
+      and the icon follows.
+   3. A YouTube video page → press **Home** → youtube.com's front page, same tab.
+   4. Tune → the pad: drag → the PC's cursor moves; tap → a click; double tap → Enter. No text
+      on the tab but the one line under the pad.
+   5. Web → Saved pages → **only** the browser's bookmarks (no m3u rows). Save this page →
+      it appears in that list within a second (or the snackbar says it went to SALU's list).
+   6. New tab → type `youtube.com` (no scheme) → Open → the page loads in the new tab.
+   7. Play → Open tabs section: collapse, expand, switch, close, ＋ — and the state survives a
+      screen change (it is remembered like the queue's).
 
 ---
 
@@ -370,8 +577,8 @@ obvious to live):
 | `lib/ui/theme.dart` | `CommitSlider` deleted — `LiveSlider` is now the app's one slider |
 | `lib/ui/web_body.dart` | live seek/volume bars with an optimistic hold, −10 s / +10 s, the tab door and the page doors, one poll in flight at a time, a fresh trial after navigation, long-press diagnostics |
 | `lib/ui/web_sheets.dart` | **new** — the tabs sheet, the saved-pages sheet, the diagnostics sheet |
-| `lib/ui/dpad.dart` | draws only the keys the PC answers, names the focused element, adds Esc and a focus re-read |
-| `lib/ui/tune_tab.dart` | Web mode always shows the pad (the pad decides how much of itself to draw) |
+| `lib/ui/dpad.dart` | **deleted 2026-09-24** — replaced by `lib/ui/mouse_pad.dart` (the trackpad, Part C3). The `web_key` verbs stay: the pad's double tap is still `Enter` |
+| `lib/ui/tune_tab.dart` | Web mode always shows the pad — since 2026-09-24 it is the **trackpad** and one line (Part C3) |
 | `test/web_media_test.dart` | **new** — the unit detection, the write-side conversion, equality, the tab/bookmark/focus parses |
 | `remote.md`, `remote_apk_ui.md`, `README.md` | the contract and the specs, updated to match |
 

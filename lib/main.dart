@@ -13,7 +13,7 @@ import 'ui/theme.dart';
 /// **Where the app is right now.** The full v2 scope: QR pairing (in-app
 /// camera scan plus the `salu://pair` deep link), and the three-tab
 /// interface — Play (player + web bodies), Browse (files + streams),
-/// Tune (equalizer + subtitles + audio, D-pad in web mode) — with the
+/// Tune (equalizer + subtitles + audio, a mouse pad in web mode) — with the
 /// focus mode, the Play-screen checklist and the connect sheet.
 /// Everything under `lib/core/` and `lib/protocol/` keeps its original
 /// shape: one WebSocket client, tolerant models, the shared protocol.

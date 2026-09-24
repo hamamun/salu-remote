@@ -73,7 +73,7 @@ produces buttons that do nothing:
 |---|---|---|
 | **Play** | transport · volume · queue | page nav · the page's own player (§4.2) |
 | **Browse** | Files · Streams | **disabled** — greyed, with the reason on tap |
-| **Tune** | Equalizer · Subtitles · Audio | **a D-pad** (§6.0) |
+| **Tune** | Equalizer · Subtitles · Audio | **a mouse pad** (§6.0) |
 
 **Browse is Player-only** because opening a PC file pulls the PC straight back to
 Player mode anyway (D8) — the tab would only ever bounce the user. It greys out
@@ -244,7 +244,7 @@ players expose anyway.
 │ ● Living Room PC  ⌄  ⋮  │
 │               ◐ Web      │
 ├──────────────────────────┤
-│  ◀  ▶  ⟳   ⛶     ▢ 3 tabs│ ← nav row; the count is a DOOR, not a label
+│ ⌂  ◀  ▶  ⟳  ⛶            │ ← nav row: Home · Back · Forward · Reload · Fullscreen
 │  [＋ New tab] [☆ Saved]  │ ← the page doors (§4.2 below)
 │  Dune — YouTube          │ ← title (tap = URL box · long-press = diagnostics)
 │  ┌────────────────────┐  │
@@ -255,25 +255,36 @@ players expose anyway.
 │   ⏪10     ( ▶ )    10⏩   │ ← the one big button, with the two nudges
 │                          │
 │  🔊 ███████░░░░    🔇    │ ← the page player's own volume + mute
+│  ⌄ Open tabs      3 tabs ＋│ ← the open-tab section, collapsible (§4.2)
 └──────────────────────────┘
 ```
 
-**Shape 2 — no media on the page** (`found:false`): the nav body — back · forward ·
-reload · fullscreen · the tab door, the page doors, the live tab title/URL card, "Open a
-URL on the PC". No volume slider (there is nothing to volume) — that row simply isn't
-there. A page that reports no length (a live stream) keeps the shape but swaps the bar for
+**Shape 2 — no media on the page** (`found:false`): the nav body — the same nav row
+(home · back · forward · reload · fullscreen), the page doors, the live tab title/URL card,
+"Open a URL on the PC", and the same open-tab section at the foot. No volume slider (there
+is nothing to volume) — that row simply isn't there. A page that reports no length (a live stream) keeps the shape but swaps the bar for
 one line, *Live / not seekable — this page does not report a length.*, and greys the two
 nudges: the same rule the Play tab follows on `playback.seekable`.
 
-**The page doors** (added 2026-09-23, user request) — navigation, not playback, so they sit
-in *both* shapes:
+**The page doors** (added 2026-09-23, revised 2026-09-24) — navigation, not playback, so
+they sit in *both* shapes:
 
 | Door | Opens | Needs from the PC |
 |---|---|---|
-| **▢ 3 tabs** (nav row) | the tab strip: every row's title + URL, the live one marked, a ✕ on each, tap to switch, **New tab** at the bottom | `web_tabs`; without it the sheet says so in one line and still opens a URL |
-| **＋ New tab** | the URL box — clipboard pre-filled as always | `web_tab_new` when the PC has it, `open_url` otherwise (which already routes into the browser in Web mode) |
-| **☆ Saved pages** | *Save this page* into SALU's URL library, then the browser's own bookmarks (read-only) and the saved list; tap = open on the PC, long-press = remove | the URL library is v1.1 and always there; `web_bookmarks` adds the browser's own pile |
+| **⌂ Home** (nav row, first seat) | the loaded page goes to **its own site's front page**, in the same tab — a YouTube video page goes to youtube.com, like SALU's own home button | `browser_nav {action:"home"}` (`web_home`); an older PC gets `browser_open` with the page's own origin instead. Grey when the page has no origin (`about:blank`, a local file) |
+| **⛶ Fullscreen** (nav row) | **one** seat, and the PC decides the target: the page's own player when the page has one, the SALU window when it has not. The mark shows what actually happened | `web_fullscreen` (§17.14.1). This replaced the old split — which made YouTube do nothing and every other stream fullscreen the whole app |
+| **Open tabs** (a section at the foot of the body, under the volume row) | every open tab: title + URL, the live one marked, a ✕ on each, tap to switch, ＋ for a new tab. **Collapsible, with the state remembered** — exactly the queue card's shape | `web_tabs`; without it the section says so in one line and its ＋ still opens a URL. The count in the header comes from the snapshot, so it is right before anything is fetched |
+| **＋ New tab** (doors row) | the URL box — clipboard pre-filled as always, and a typed address is given `https://` before it is sent (`lib/core/web_url.dart`, the blank-tab fix) | `web_tab_new {url}` when the PC has it, `open_url` otherwise (which already routes into the browser in Web mode) |
+| **☆ Saved pages** | **the PC browser's bookmarks, and nothing else**; *Save this page* appends the page being looked at (to the browser's bookmarks with `web_bookmark_add`, else to SALU's own list, and the snackbar says which). Tap = open on the PC | `web_bookmarks`; without it the sheet says the PC does not report bookmarks yet and the save still works |
 | **long-press the title card** | Web diagnostics: what the PC reported, in its own numbers, next to what the phone made of them | nothing — it is the phone's own glass, and it is how a units question gets settled by looking |
+
+**Why the tabs are a section and not a sheet** (user, 2026-09-24: *"i need that thing will
+show below volume bar and there will be heading 'open tab' just like queue for normal player
+and will have collapse/expand option like queue"*): switching tabs means looking at *another
+page*, and a sheet covers the page you are about to look at. The section leaves the page card
+and the controls visible, costs zero pixels when collapsed, and is the same row-panel the user
+already knows from the Queue. **SALU's own m3u list no longer appears in the saved-pages
+sheet** — the user's own verdict: *"m3u which is player part should not appear in that list"*.
 
 Closing a tab asks nothing, the way a browser does not; the PC keeps its own session
 history and its own last-tab rule.
@@ -294,10 +305,11 @@ Shared rules:
   outside."* — and drops back to the nav shape. Hidden beats broken, every time. That
   verdict belongs to **the page**, not to the session: navigating anywhere (the URL box, a
   tab switch, the PC user clicking something) gives the next page a fresh trial.
-- **Tabs are a door, not a number.** The strip list, switching, closing and new tabs are
-  built on the phone and specified for the PC in `remote.md` §17.13; until a PC advertises
-  `web_tabs` the same door says what is missing and still opens a URL. The downloads shelf
-  stays PC-only — nothing a couch user would do with it.
+- **The open tabs are a section, not a button** (user, 2026-09-24). The list, the switching,
+  the closing and the new tab are built on the phone and specified for the PC in `remote.md`
+  §17.13; the section is collapsible and remembers its state like the queue card, and until a
+  PC advertises `web_tabs` it says what is missing and its ＋ still opens a URL. The downloads
+  shelf stays PC-only — nothing a couch user would do with it.
 - **"Open a URL on the PC"** is the sleeper feature of this whole app: type or paste on
   your phone, the PC browser goes there. Available in both shapes (tap the title in
   Shape 1).
@@ -395,66 +407,63 @@ episode is always two taps away (SALU already knows that folder).
 
 Segmented: **Equalizer | Subtitles | Audio**. All three show *"Nothing is playing"* (with
 a Play shortcut) when the PC has no media. **In Web mode none of the three exist** — mpv
-is not in the picture — and the tab becomes a D-pad instead (§6.0).
+is not in the picture — and the tab becomes a **mouse pad** instead (§6.0).
 
-### 6.0 Web mode — the tab becomes a D-pad (added 2026-09-20)
+### 6.0 Web mode — the tab becomes a mouse pad (rewritten 2026-09-24)
 
-In Web mode there is no equalizer, no subtitle track and no audio track to choose.
-What there *is* is a web page the user cannot reach from the couch. So Tune turns
-into the thing a TV remote is for:
+> **This replaces the D-pad.** The user, after using the D-pad on real sites: *"i need to
+> remove this and everything. after removing it will be mouse pad as laptop has a nice
+> bounding box will be shown which will be track pad. by touching there will activate mouse
+> at salu and double tap will be enter. below track pad will be simple one line."*
+> So: no arrows, no OK, no Esc chip, no focus card, no explanation — **a trackpad and one
+> line**. The `web_key` verbs (`ArrowUp` / `ArrowDown` / `Enter` / `Escape`) stay in the
+> protocol; the pad simply uses `Enter` for its double tap, and the PC keeps its focus ring.
+
+In Web mode there is no equalizer, no subtitle track and no audio track to choose. What there
+*is* is a web page the user cannot reach from the couch — so the tab hands them **the PC's own
+pointer**, which is the thing that can reach everything on it.
 
 ```
-        ▲
-   ◀    [ OK ]    ▶
-        ▼
-     [ ✕ Esc ]
-  ┌──────────────────────────────┐
-  │ Subscribe · BUTTON · 4 of 120  ⟳│ ← what OK is about to click
-  │ ▲▼ move the focus · ◀▶ back and │
-  │ forward · OK clicks             │
-  └──────────────────────────────┘
+┌────────────────────────────────┐
+│                                │
+│          the trackpad          │ ← drag here; the PC's cursor follows
+│       (round-cornered box)      │
+│                                │
+└────────────────────────────────┘
+              Mouse                ← the one line, and nothing else
 ```
 
-| Key | Does | Verb |
+| Gesture | Does | Verb |
 |---|---|---|
-| `▲` `▼` | walk the page's focusable elements (link · button · input) | **`web_key {key:"ArrowUp"|"ArrowDown"}`** |
-| `◀` `▶` | history back / forward — the escape hatch when focus-walking lands somewhere useless | `browser_nav {action:"back"|"forward"}` (already in §17.4) |
-| `OK` | activate the focused element | **`web_key {key:"Enter"}`** |
-| `Esc` | leave page/element fullscreen, close the topmost dialog | **`web_key {key:"Escape"}`** — added 2026-09-23: a couch remote with no Esc can leave the PC stuck in a full-screen advert |
-| `⟳` | read the focus again without moving it | **`web_focus_get`** |
+| drag | the PC's pointer follows the thumb, live | **`web_mouse_move {dx, dy}`** (new, `remote.md` §17.14.3) |
+| single tap | left click, where the pointer already stands | **`web_mouse_click {button:"left", count:1}`** (new) |
+| double tap | **Enter** — activate whatever the page has focused | `web_key {key:"Enter"}` (§17.13.5) — a double click when the PC has no `web_key` |
 
-**The pad draws only the keys this PC answers** (2026-09-23). `web_key` is advertised in
-`hello.features` or it is not: when it is, the pad is the full cross above; when it is not,
-the pad is **◀ ▶ only** — plain `browser_nav`, which every PC has — with one line under it
-saying that focus walking needs an updated SALU. An empty Tune tab was the old answer and it
-was worse: a smaller pad with a sentence is honest, a blank card is a dead end, and a drawn
-button that does nothing is the fastest way to make an app feel broken.
+**The one line under the pad says `Mouse`.** That is the whole text budget of this tab. The
+only time it says anything else is the honest one: when the PC has not advertised `web_mouse`
+(or answered `unknown_command` for it), it reads *"Mouse needs an updated SALU on the PC"* —
+still one line, still the same box in the same place. A pad that silently does nothing is the
+one outcome worth a sentence; everything else is noise in front of a page.
 
-**The focus line is part of the pad, not a nicety.** Every `web_key` ack carries
-`{focus:{label, tag, index, count, editable}}` and the card under the pad shows it —
-*Subscribe · BUTTON · 4 of 120* — so the user knows what OK is about to do before doing it.
-When `editable` is true the line says the arrows belong to the caret and OK submits
-(`remote.md` §17.13.5).
+**Why the gestures are these.** A trackpad's tap-to-click is the gesture the hand already
+knows, and Enter is what a page's own focus model understands everywhere — YouTube's player,
+a search box, a cookie banner's Accept. Their user asked for both by name.
 
-**The PC must draw a ring on whatever the phone has focused.** Without it the user
-is steering the browser blind and the feature is worse than useless. The ring is
-part of the design, not a nicety.
+**Nothing is drawn while the finger works** — no trail, no ripple, no coordinates. The
+feedback is the PC's cursor on the PC screen, which is why the PC must keep that cursor
+visible while the pad is in use (§17.14.3).
 
-**Where a text field has focus, the arrows belong to the caret** and `OK` submits
-rather than clicking. The phone shows what is focused and what kind of element it
-is, so the user can tell which of the two they are about to get.
+**Cost control.** Travel is batched on the phone: one packet per 40 ms (~25 commands a
+second), at most two packets in flight, each clamped to ±320 px after a 2.5× gain. That sits
+inside the PC's 30 cmd/s budget beside the 1/s web-media read, and a slow PC slows the
+pointer instead of queuing stale movement behind it.
 
-**Honest limits.** This walks the page's own tab order, so it is exactly as good as
-the site's markup. Well-built pages (link lists, forms, YouTube's own player
-controls) work. Single-page apps that draw everything into a `<canvas>` and manage
-focus themselves will not, and nothing injected from outside can fix that. The
-preview in `design/remote-preview/` shows the interaction with a mock focus order.
+**Honest limits.** A mouse is exactly as good as the PC's ability to inject input. Where it
+cannot (a locked session, a build without the input path) the pad says so in its line and the
+user still has the Play tab's own controls. Nothing is faked.
 
-**Implementation.** `remote.md` §17.4 defines `browser_nav` and the `web_media_*`
-family but nothing that moves focus, so `web_key` has to be added. It is injected
-JavaScript through the same `WebTab.executeScript` path `remote_web_media_bridge.dart`
-already uses (§17.11): read `document.activeElement`, walk to the next/previous
-focusable, `scrollIntoView`, and `click()` on Enter.
+**Implementation.** `remote.md` §17.14.3; the phone side is `lib/ui/mouse_pad.dart`, and
+`lib/ui/dpad.dart` is deleted.
 
 ### 6.1 Equalizer
 
@@ -610,8 +619,8 @@ a silent failure:
 | PC-only fact | What the APK shows |
 |---|---|
 | No media loaded | Tune tab: *"Nothing is playing"* + a Play shortcut |
-| PC is in Web mode | Play tab shows the Web body (nav row · page doors · the page player's own controls); Tune tab becomes the D-pad |
-| **The PC has not been updated** — `web_tabs`, `web_bookmarks`, `web_key` or `web_media_unit` missing from `hello.features` | Each door says so in one plain line and keeps working at the level every PC supports: the tab sheet still opens a URL, Saved pages still shows SALU's own list, the pad is ◀ ▶ only, the media bars read the units off the reply. **Never a dead button** |
+| PC is in Web mode | Play tab shows the Web body (nav row · page doors · the page player's own controls); Tune tab becomes the mouse pad |
+| **The PC has not been updated** — any of the web flags missing from `hello.features` (`web_tabs`, `web_bookmarks`, `web_key`, `web_media_unit`, and since 2026-09-24 `web_home`, `web_fullscreen`, `web_mouse`, `web_bookmark_add`) | Each door says so in one plain line and keeps working at the level every PC supports: the Open tabs section still opens a URL, Saved pages still saves into SALU's list, Home falls back to the page's origin, fullscreen falls back to the old split, the trackpad says one line, the media bars read the units off the reply. **Never a dead button** |
 | The page reports no length (live stream, unloaded element) | No seek bar — one line, *"Live / not seekable — this page does not report a length."*, and the ±10 s nudges greyed with it |
 | The page reports no focus | The pad's card reads *"Nothing focused yet"* with the ring hint, instead of a stale element name |
 | OpenSubtitles **not signed in** | *"Sign in to OpenSubtitles on the PC to download subtitles."* |

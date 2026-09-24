@@ -94,7 +94,6 @@ class WebTabsSheet extends StatefulWidget {
 class _WebTabsSheetState extends State<WebTabsSheet> {
   final SaluClient _client = SaluClient.instance;
   WebTabPage? _page;
-  bool _loading = false;
   String? _error;
 
   bool get _supported => _client.supportsWebTabs;
@@ -107,24 +106,13 @@ class _WebTabsSheetState extends State<WebTabsSheet> {
 
   Future<void> _refresh() async {
     if (!_supported) return;
-    if (mounted) {
-      setState(() {
-        _loading = _page == null;
-        _error = null;
-      });
-    }
+    if (mounted) setState(() => _error = null);
     final RemoteReply reply = await _client.webTabsGet();
     if (!mounted) return;
     if (reply.ok) {
-      setState(() {
-        _page = WebTabPage.from(reply.data);
-        _loading = false;
-      });
+      setState(() => _page = WebTabPage.from(reply.data));
     } else {
-      setState(() {
-        _loading = false;
-        _error = RemoteErrorCopy.text(reply.code, reply.message);
-      });
+      setState(() => _error = RemoteErrorCopy.text(reply.code, reply.message));
     }
   }
 

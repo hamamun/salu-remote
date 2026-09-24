@@ -52,11 +52,11 @@ abstract final class RemoteErrorCopy {
       case 'no_web_media':
         return "This site's player can't be controlled from outside.";
       case 'tab_not_found':
-        return 'That tab is no longer open.'
+        return 'That tab is no longer open.';
       case 'no_web_tabs':
-        return 'Tab control needs an updated SALU on the PC.'
+        return 'Tab control needs an updated SALU on the PC.';
       case 'no_web_bookmarks':
-        return 'The PC\'s browser has no bookmarked pages.'
+        return 'The PC\'s browser has no bookmarked pages.';
       case 'busy':
         return 'The PC is busy — try again in a moment.';
       case 'library_full':

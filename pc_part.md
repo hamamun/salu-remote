@@ -11,8 +11,8 @@ Two work orders live in this file:
 
 | Part | Date | What | Status |
 |---|---|---|---|
-| **A** | 2026-09-23 | **The web section** — page-player units (the reported bug), the right media element, `web_key` + the focus ring, the tab strip mirror (list · switch · close · new), the bookmark mirror | **live — do this one** |
-| **B** | 2026-09-22 | The `fs_places` drive scan (§1–9), the group-by pill bug (§10), channel grouping (§11), phone-local channel favourites (§12, a record, no PC work) | unchanged, kept below |
+| **A** | 2026-09-23 | **The web section** — page-player units (the reported bug), the right media element, `web_key` + the focus ring, the tab strip mirror (list · switch · close · new), the bookmark mirror | **implemented 2026-09-24 — see the record at the end of Part A** |
+| **B** | 2026-09-22 | The `fs_places` drive scan (§1–9), the group-by pill bug (§10), channel grouping (§11), phone-local channel favourites (§12, a record, no PC work) | implemented (verified from the code), kept below |
 
 The protocol for Part A is already written into the phone repo's `remote.md` — **§17.4**
 (verbs and units), **§17.11** (the web-media bridge) and **§17.13** (tabs, bookmarks,
@@ -385,6 +385,33 @@ Then the manual pass, in the phone repo's own words: `remote.md` §17.9 steps **
 (unchanged) and the new **23–28**. Steps 23 and 24 pass against today's PC as soon as the
 phone is rebuilt, because the phone now reads whatever units the PC speaks — that is the
 point of the fallback. Steps 25–27 wait on A3–A5, and each shows its honest line until then.
+
+---
+
+## Part A — implementation record (2026-09-24)
+
+Done in this repo (the phone side is `salu-remote`; this record covers the PC):
+
+| A | Package | Where it landed |
+|---|---|---|
+| A1 | units + `seekable` + clamping | `remote_web_media_bridge.dart` — the read script converts `currentTime`→ms and `volume`→percent at the script edge, sanitizes `NaN`/`Infinity` to `0` + `seekable:false`, stamps `unit:"ms"`/`volumeUnit:"percent"`, and the seek/volume scripts clamp instead of rejecting. `RemoteWebMediaResult` parses ints and re-defends the sanitization in Dart. |
+| A2 | element pick | `remote_web_media_bridge.dart` — the shared find body prefers a playing, audible, visible element, then largest by `videoWidth×videoHeight` (box, duration), ignores zero-box/sub-2-second/hidden elements, re-finds every command, and stamps an `el` description for the log (`remoteWebMediaElLog`, `_webMediaGet` prints it). |
+| A3 | `web_key` + `web_focus_get` + ring | `remote_web_focus_bridge.dart` (pure script builders + `RemoteWebFocusBridge` adapter), registered through `BrowserService.remoteFocusScript` from the active tab in `browser_screen.dart`; handler verbs in `remote_command_handler.dart`. The key script injects the 2 px accent ring page-side on every answer. |
+| A4 | tab-strip mirror + four verbs | `browser_service.dart` (`WebTabMirror`, `webTabs`, `setTabHandler`, `remoteTabAction`); `browser_screen.dart` refreshes the mirror on add/remove/select/title/media (and installs the one write path); `remote_command_handler.dart` answers `web_tabs_get`/`web_tab_activate`/`web_tab_close`/`web_tab_new` with 50-row / 80-title / 180-url / honest-`count` caps. |
+| A5 | bookmark mirror | `remote_command_handler.dart` `web_bookmarks_get` — read-only over `WebFavouritesService`, 200-entry / 80-title / 180-url / one-level-`folder` caps, no write verb exists. |
+| A6 | housekeeping | `web_media_unit`/`web_key`/`web_tabs`/`web_bookmarks` advertised in `hello.features` (`RemoteService._helloFeatures`); `proto` stays **1**; `no_web_tabs`/`tab_not_found`/`no_web_bookmarks` added to `remote_protocol.dart` (mirror into the phone's copy); the repo's own `remote.md` §17.3 file map updated. |
+| A7 | tests | `test/remote_web_media_test.dart` (units both ways, NaN/Infinity, clamping, delta, pick), `test/remote_web_find_test.dart` (pick: playing-vs-hidden, bumper/zero-box, cross-origin honesty), `test/remote_web_tabs_test.dart` (mirror, verbs, stale/negative index, 200-tab 8 KB, bookmarks), `test/remote_web_focus_test.dart` (order + filters, caret mode, Enter click/submit, Escape order, payload shape). |
+| A8 | acceptance checklist | Recorded in this file (the 11 steps above) — to be run on the user's PC with the phone connected, in the given order. |
+| A9 | order of work | Followed: A1 → A2 → A4 → A3 → A5. |
+| A10 | phone first | Run `flutter pub get` / `flutter analyze` / `flutter test` in `salu-remote` before shipping — this sandbox has no Flutter SDK, so the phone side is still uncompiled. |
+
+**Not done here (by design), and honest about it:** the tab/bookmark/focus handshake is
+verified by unit tests against the bridge + handler seams, but the live page behaviours
+(driving a real YouTube video, the ring on a real site, Esc out of a real advert) are on
+the A8 manual checklist — they need a Windows WebView2 build and a paired phone. The two
+temporary §10 pill-instrumentation `debugPrint`s in `playlist_panel.dart` and the
+remote-pill bookkeeping are left in place until the live pill check on the user's PC
+closes §10, exactly as §10's own plan asked.
 
 ---
 

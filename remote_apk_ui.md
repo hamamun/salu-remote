@@ -80,6 +80,15 @@ Player mode anyway (D8) — the tab would only ever bounce the user. It greys ou
 rather than vanishing, so the bar does not reshuffle under the thumb, and tapping
 it says why. Switching into Web mode while Browse is up moves the user to Play.
 
+**The greying follows the snapshot in both directions, in the same frame as the body**
+(fixed 2026-09-24). The bar has to *listen*; it must not read the mode while the page
+happens to be rebuilding. It used to do the second, which made the greying a one-way
+door: entering Web mode while Browse was up repainted the root (the §2.1 bounce calls
+`setState`), so the seat greyed and looked right — but coming back to Player mode from
+the Play tab repainted nothing else, so the seat stayed grey and kept answering *"the PC
+is in Web mode"* to a PC that had already left it. `test/browse_seat_test.dart` pins both
+directions and the sentence on tap.
+
 The **mode switch shows both seats** — `Player` and `Web` side by side, not one
 pill that toggles. You should be able to see where you are going before you go.
 

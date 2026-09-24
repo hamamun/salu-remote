@@ -1184,6 +1184,15 @@ Manual checklist additions:
 28. **A page whose player is out of reach** still behaves: one failed write drops the Web
     body to the nav shape with its one honest line, and navigating somewhere else (the URL
     box, a tab switch) gives the next page a fresh trial instead of staying dropped.
+29. **(2026-09-24) The mode flip, both ways.** With the **Play** tab up, tap the mode pill's
+    **Web** seat → the phone's Play tab becomes the web body *and the Browse seat greys in
+    the same frame* (no tab change, nothing else repainted). Tap Browse → one line, *"Files
+    and Streams are Player-only — the PC is in Web mode."* Now tap the pill's **Player**
+    seat → SALU leaves the browser, the Play tab cross-fades back to the player, **and the
+    Browse seat un-greys with it**: tapping it opens Files and says nothing about Web mode.
+    Then repeat the pair from the **Tune** tab, where no bounce is involved at all. (The
+    seat used to stay grey after the return until some unrelated tab change repainted the
+    bar — `remote_apk_ui.md` §2.1, `test/browse_seat_test.dart`.)
 
 ### 17.10 Build-order impact
 

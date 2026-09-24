@@ -209,7 +209,17 @@ class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
           );
         },
       ),
-      bottomNavigationBar: _bottomBar(),
+      // The bar listens to the snapshot in its own right (2026-09-24 bug fix):
+      // it used to read `_client.snapshot.value` once, inside `_bottomBar`, and
+      // so only ever refreshed when something *else* rebuilt this page. A mode
+      // flip that did not move the tab left the Browse seat stuck in the state
+      // it was built with — greyed, and still claiming the PC was in Web mode
+      // after the PC had come back to Player.
+      bottomNavigationBar: ValueListenableBuilder<SaluSnapshot?>(
+        valueListenable: _client.snapshot,
+        builder: (BuildContext context, SaluSnapshot? snapshot, _) =>
+            _bottomBar(web: snapshot?.isWeb ?? false),
+      ),
     );
   }
 
@@ -327,8 +337,13 @@ class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
 
   // ── bottom bar ───────────────────────────────────────────────────────────
 
-  Widget _bottomBar() {
-    final bool web = _client.snapshot.value?.isWeb ?? false;
+  /// The bottom bar. [web] is handed in by the snapshot listener in [build] —
+  /// **never read `_client.snapshot.value` in here.** A value read during
+  /// `build` is a photograph of the last rebuild, and the bar rebuilds only
+  /// when the tab, the focus mode or the checklist changes; the PC's mode
+  /// changes whenever the PC likes. That mismatch is what kept the Browse seat
+  /// greyed after SALU had already come back to Player mode.
+  Widget _bottomBar({required bool web}) {
     final bool tuneShown = _prefs.isShown(PlaySection.tuneTab);
     return Container(
       color: AppColors.surface,

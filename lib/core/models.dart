@@ -1068,7 +1068,7 @@ class WebMediaDialect {
       other is WebMediaDialect && other.time == time && other.volume == volume;
 
   @override
-  int hashCode => Object.hash(time, volume);
+  int get hashCode => Object.hash(time, volume);
 
   @override
   String toString() =>
@@ -1157,7 +1157,7 @@ class WebMediaInfo {
       other.dialect == dialect;
 
   @override
-  int hashCode => Object.hash(
+  int get hashCode => Object.hash(
         found,
         playing,
         position,
@@ -1181,7 +1181,7 @@ class WebMediaInfo {
 /// through a plugin would otherwise cost the user a seek bar with nothing on
 /// screen to explain why.
 Object? _webNum(Map<String, Object?> raw, String key, String alt, [String? alt2]) {
-  for (final String name in <String>[key, alt, if (alt2 != null) alt2]) {
+  for (final String name in <String>[key, alt, ?alt2]) {
     final Object? value = raw[name];
     if (value is num) return value;
     if (value is String) {
@@ -1395,8 +1395,8 @@ class WebFocusInfo {
   /// The one line under the pad: `Subscribe · BUTTON · 4 of 120`.
   String get line {
     final List<String> parts = <String>[
-      if (label != null) label!,
-      if (tag != null) tag!,
+      ?label,
+      ?tag,
       if (count > 0) '${index + 1} of $count',
     ];
     if (parts.isEmpty) return 'Nothing focused yet';

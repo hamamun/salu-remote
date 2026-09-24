@@ -148,6 +148,24 @@ per section. This is what keeps the Tune tab usable on a small phone.
 (`Media only · Sort · Hidden folders`) collapses behind a small filter icon, because it is
 set once and never touched again.
 
+### 3.1 PC power lives in ⋮, not on the Play screen (2026-09-24)
+
+The existing three-dot menu stays available on **Play, Browse and Tune**, even
+in Focus mode. It keeps **Settings** and **Forget this PC**, then a divider and
+**Sleep PC** / **Shut down PC**. There is no Power card, no extra transport icon,
+and no new PC on-screen button. Use explicit words: “Shut down PC” means turn
+the computer off, not pause media or toggle its power.
+
+The two items are visible but disabled when disconnected. When an authenticated
+PC does not advertise `pc_power` they remain disabled with an update hint.
+Tapping an enabled item names the PC in a confirmation dialog; sleep explains
+the temporary disconnect/reconnect, shutdown warns about unsaved work and that
+the phone cannot switch the PC back on. Cancel sends nothing. After confirmation,
+recheck the link and PC identity before sending exactly one request. A reply
+saying `ack` means “requested”, not proof that Windows has finished. If the
+connection is lost before the reply, say so without automatically retrying a
+potentially destructive command. Wire and PC requirements: `remote.md` §17.15.
+
 ---
 
 ## 4. Tab 1 — Play

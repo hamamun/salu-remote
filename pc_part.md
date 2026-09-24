@@ -7,10 +7,11 @@
 > sandbox the phone side was written in has **no Flutter SDK**, so `flutter analyze` and
 > `flutter test` have not been run on it yet. Do that first.
 
-Three work orders live in this file:
+Four work orders live in this file:
 
 | Part | Date | What | Status |
 |---|---|---|---|
+| **D** | 2026-09-24 | **PC power** — authenticated `pc_sleep` / `pc_shutdown`, both advertised by `pc_power` | **Phone menu and commands built; PC implementation still required** |
 | **C** | 2026-09-24 | **The web fixes the user reported after using it** — one fullscreen seat that actually works (`web_fullscreen` + the gesture problem), Home, the trackpad (`web_mouse_move` / `web_mouse_click`), add-only bookmarks, and the blank new tab | **built in this repo (see the Part C implementation record) — acceptance on the user's PC pending** |
 | **A** | 2026-09-23 | **The web section** — page-player units (the reported bug), the right media element, `web_key` + the focus ring, the tab strip mirror (list · switch · close · new), the bookmark mirror | live; still needed (C builds on it) |
 | **B** | 2026-09-22 | The `fs_places` drive scan (§1–9), the group-by pill bug (§10), channel grouping (§11), phone-local channel favourites (§12, a record, no PC work) | unchanged, kept below |
@@ -20,12 +21,49 @@ The protocol for Part A is already written into the phone repo's `remote.md` —
 focus, feature flags). The phone-side UI spec is `remote_apk_ui.md` §4.2, §6.0 and §8.
 Read §17.13 once before starting: it is the contract, and this part is the shopping list.
 Part C's contract is **§17.14**, and its shopping list is Part C below.
+Part D's contract is **§17.15**; it is independent of the web work.
 
 **Part C and Part A are not alternatives.** A3–A5 (the focus keys, the tab mirror, the
 bookmark mirror) are what Part C's new verbs lean on: `web_fullscreen` clicks the page's own
 fullscreen control, `web_mouse_click` clicks wherever the pointer is, and `web_bookmark_add`
 needs the bookmark store A5 already reads. Do A first if it is not in yet; C then needs no
 rework.
+
+---
+
+# Part D — sleep and shut down from the remote's ⋮ menu (2026-09-24)
+
+> The **phone-side work is in `hamamun/salu-remote`**, not in the PC repo:
+> `lib/ui/root.dart` (two menu items and confirmation), `lib/core/client.dart`
+> (wire verbs), `lib/core/models.dart` (feature gate), and the power tests.
+> Neither item can actually sleep or shut down a PC until this part is built in
+> `hamamun/Salu`. The exact contract is `remote.md` §17.15.
+
+1. In **`lib/core/remote/remote_command_handler.dart`**, accept `pc_sleep` and
+   `pc_shutdown` only after the server's normal LAN and paired-device auth gate.
+   They have **no arguments** and must not route through media transport. Reject
+   a second power request while the first is pending; never accept an arbitrary
+   executable/command line from the phone. Do not add on-screen power controls
+   to the PC app — only the remote UI has the buttons.
+2. Use a small **Windows power service** for the actual system operations:
+   suspend for `pc_sleep`, normal shutdown for `pc_shutdown`. Respect Windows
+   policy/privilege errors and unsaved-work prompts; **do not force-close apps**.
+   An OS refusal should produce an `error` with a readable explanation when
+   known before scheduling. Do not confuse shutting down SALU with shutting down
+   Windows, and do not add Wake-on-LAN or a turn-on verb.
+3. In **`lib/core/remote/remote_service.dart`**, send the command's `ack`
+   **before** dispatching the OS action after a short delay. Running sleep or
+   shutdown inline closes the WebSocket before the phone receives the reply.
+   `ack` means accepted/scheduled, not proof Windows finished the operation.
+   Advertise `pc_power` in `hello.features` **only once both verbs work** on
+   the current system; keep `proto` at 1. The phone shows disabled menu items
+   while offline or when the feature is absent.
+4. Test with an injected/fake OS power service (never sleep or shut down a CI
+   runner): unauthenticated/unsupported requests fail, a paired phone's single
+   request is acknowledged before dispatch, duplicates cannot launch a second
+   system call, failures are reported honestly, and both verbs work in Player
+   and Web modes. On a real Windows PC, confirm sleep/wake reconnect and verify
+   that shutdown does not force-close unsaved work.
 
 ---
 

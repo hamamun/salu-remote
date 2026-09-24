@@ -1605,3 +1605,47 @@ this section is replacing — which is exactly why the flags exist.
 session). The phone's copy of `RemoteErrorCode` gets it in the same sitting as the PC's
 (§17.13, A6.2 — the header comment on `lib/protocol/remote_protocol.dart` is the rule: two
 copies, one meaning, changed together).
+
+---
+
+## 17.15 PC power from the phone's three-dot menu (2026-09-24)
+
+The controls appear **only in the phone UI**: the existing ⋮ menu keeps Settings and
+Forget this PC, then a divider, **Sleep PC** and **Shut down PC**. They are available
+from any tab and Focus mode, not in the transport row and not in a collapsible card.
+Both ask for confirmation, naming the connected PC; Shut down warns about unsaved work
+and explains that the remote cannot turn the PC on again.
+
+This is **not implemented on the PC in this repository** (`hamamun/salu-remote` is the
+Android project). In `hamamun/Salu`, add the following authenticated commands to
+`RemoteCommandHandler`; they act on Windows, not on SALU's media transport:
+
+| Feature in `hello.features` | Verb | Args | Successful reply | Meaning |
+|---|---|---|---|---|
+| `pc_power` | `pc_sleep` | none | `ack` | Schedule Windows sleep. |
+| `pc_power` | `pc_shutdown` | none | `ack` | Schedule a normal Windows shutdown (not a force-close, restart, or turn-on). |
+
+Advertise **`pc_power` only if both commands are supported** on this PC. Keep
+`proto: 1`: the verbs are additive; older PCs never advertise them and the phone
+shows two disabled items, with an update hint when connected. When offline, the
+items are disabled. The phone rechecks the link, feature and PC identity after
+confirmation, sends a single command, and never automatically retries a power
+request whose reply was lost.
+
+The PC must apply its existing paired-device/LAN auth gate before either command.
+The command handler should refuse further power requests while one is pending;
+never run arbitrary shell input supplied by a phone. Check obvious Windows policy
+or privilege failures and answer with an `error` and a readable message instead of
+a false success. **Send the `ack` before performing the OS action** (schedule it
+shortly afterward): if Windows suspends or exits within the handler, the socket
+closes before the reply arrives and the phone cannot know whether it worked.
+An `ack` means the request was accepted/scheduled, not that the OS has already
+completed it. Do not force-close unsaved work on shutdown; Windows may delay or
+veto it. The remote's existing reconnect loop resumes after sleep/wake. A powered-
+off PC requires a person to turn it on; Wake-on-LAN is not part of this feature.
+
+Acceptance: both verbs are rejected before auth, cannot be invoked on an old PC,
+are issued exactly once after phone confirmation, and reply before the connection
+is intentionally lost; verify sleep/wake reconnect and that shutdown does not
+force-close an application with unsaved work. See `pc_part.md` Part D for the PC
+implementation work order.

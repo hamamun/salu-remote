@@ -739,6 +739,11 @@ class SaluClient {
     }
   }
 
+  // PC power (`remote.md` §17.15). The PC owns these system actions; the
+  // phone offers them only after `hello.features` advertises `pc_power`.
+  Future<RemoteReply> sleepPc() => send('pc_sleep');
+  Future<RemoteReply> shutDownPc() => send('pc_shutdown');
+
   // Transport (`remote.md` §9). The PC clamps everything; the phone only sends
   // intent and lets the snapshot tell it what actually happened.
   Future<RemoteReply> playPause() => send('play_pause');
@@ -1100,4 +1105,5 @@ class SaluClient {
   bool get supportsWebFullscreen => supports(RemoteFeature.webFullscreen);
   bool get supportsWebMouse => supports(RemoteFeature.webMouse);
   bool get supportsWebBookmarkAdd => supports(RemoteFeature.webBookmarkAdd);
+  bool get supportsPcPower => supports(RemoteFeature.pcPower);
 }

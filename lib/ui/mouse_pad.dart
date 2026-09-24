@@ -7,18 +7,44 @@ import '../core/client.dart';
 import '../core/reply.dart';
 import 'theme.dart';
 
-/// The Tune tab in Web mode (user, 2026-09-24): **a trackpad, and one line**.
+/// The Tune tab in Web mode (user, 2026-09-24): **a trackpad, two arrows, and
+/// one line**.
 ///
-/// The D-pad that used to live here is gone — arrows, OK, Esc, the focus card
-/// and every line of explanation with them. What replaces it is the thing a
-/// person actually wants in front of a web page they cannot reach: the PC's own
-/// pointer, under a thumb.
+/// The old D-pad that used to live here is gone — its cross, OK, Esc, focus
+/// card and every line of explanation with them. What replaces it is the thing
+/// a person actually wants in front of a web page they cannot reach: the PC's own
+/// pointer, under a thumb — and, since the user asked for it the same day, two
+/// seats that scroll the page without moving the pointer at all.
 ///
 /// | Gesture | Does | Verb |
 /// |---|---|---|
 /// | drag | the PC's pointer follows the thumb, live | `web_mouse_move {dx, dy}` |
 /// | single tap | left click, where the pointer already is | `web_mouse_click {button:"left", count:1}` |
 /// | double tap | **Enter** — activates whatever the page has focused | `web_key {key:"Enter"}` |
+/// | ▲ / ▼ under the pad | the page's arrow key, once per tap | `web_key {key:"ArrowUp"\|"ArrowDown"}` |
+///
+/// **Why the arrows reuse `web_key` instead of asking for a new verb** (user,
+/// 2026-09-24: *"is there no easy way"*). There is — it was already here. The
+/// old D-pad's ▲▼ stayed in the protocol and stayed implemented on the PC when
+/// the D-pad was deleted; only their seat on the phone went away
+/// (`lib/core/client.dart` says so at the `webKey` seat). Giving them a seat
+/// again costs **nothing on the PC**. Builds that implement and advertise
+/// `web_key` already accept these arrows with the same focus-walk behavior as
+/// the old D-pad. A real mouse-wheel verb would scroll
+/// more evenly, and it is the right next step if these feel jumpy on real
+/// sites — but it is a change in a second repository, and this one is not.
+///
+/// **What that honestly means.** The PC's `ArrowDown` is a *focus walk* — "next
+/// focusable element, `scrollIntoView`, `focus()`" (`remote.md` §17.13.5), not
+/// a measured scroll step. On an ordinary page it reads as scrolling, because
+/// the page scrolls to keep the focused element centred; in a text field the
+/// arrows move the caret, and a page with nothing focusable may not move. The
+/// PC's own focus ring is what shows where the walk landed.
+///
+/// So: **one tap is one key, and deliberately no hold-to-repeat.** Repeated
+/// focus walks can race through a page's tab order, rather than giving the user
+/// a measured scroll step. Hold-to-repeat becomes worth having with a wheel
+/// verb, where a step is a step.
 ///
 /// Three rules make it feel like hardware rather than a remote:
 ///
@@ -29,9 +55,10 @@ import 'theme.dart';
 ///   stale movement behind it.
 /// * **Nothing is drawn while the finger works.** No trail, no ripple, no
 ///   coordinates. The feedback is the PC's own cursor, which is the whole point.
-/// * **One line, and only one.** Under the pad it says *Mouse*. If the PC has
-///   not advertised `web_mouse`, that same line is the only thing that changes
-///   — the pad itself stays exactly where it is, because the box is the tab.
+/// * **One line, and only one.** Under the arrows it says *Mouse*. Each half of
+///   this tab has its own promise from the PC (`web_mouse`, `web_key`), and if
+///   one of them is missing that same line is the only thing that changes — the
+///   pad stays exactly where it is, because the box is the tab.
 class MousePad extends StatefulWidget {
   const MousePad({super.key});
 
@@ -48,6 +75,25 @@ class MousePad extends StatefulWidget {
   /// A single packet never carries more than this, so a flick across the pad
   /// arrives as several sane steps instead of one teleport the PC may reject.
   static const double maxStep = 320;
+
+  /// The pad's share of the phone's screen height.
+  ///
+  /// **60%, down from 70%** (user, 2026-09-24). Separately, the layout
+  /// reserves 100 dp under the pad for the 18 dp gap, 56 dp arrow row, and 26 dp
+  /// caption allowance; the pad shrinks if the tab has less room.
+  static const double heightFactor = 0.60;
+
+  /// The two scroll seats under the pad: 56 dp thumb targets, 18 dp apart, in
+  /// the pad's own surface and hairline so they read as part of the trackpad
+  /// rather than as a toolbar that wandered in.
+  static const double arrowSize = 56;
+  static const double arrowGap = 18;
+
+  /// Pad → arrow row.
+  static const double controlsGap = 18;
+
+  /// Arrow row → the one line: the gap (10) and the line itself (16).
+  static const double caption = 26;
 
   @override
   State<MousePad> createState() => _MousePadState();
@@ -66,11 +112,21 @@ class _MousePadState extends State<MousePad> {
   /// steps.
   int _inFlight = 0;
 
-  /// The PC advertised `web_mouse` and then answered `unknown_command` — say so
+  /// The PC advertised a feature and then answered `unknown_command` — say so
   /// in the one line instead of pressing into the dark.
-  bool _refused = false;
+  ///
+  /// **One flag per feature, not one for the tab.** They used to share a flag,
+  /// which meant a `web_key` refusal also silenced the trackpad: a PC with a
+  /// working pointer and no key handler lost both.
+  bool _mouseRefused = false;
+  bool _keyRefused = false;
 
-  bool get _mouse => _client.supportsWebMouse && !_refused;
+  bool get _mouse => _client.supportsWebMouse && !_mouseRefused;
+
+  /// The arrows' own promise. `web_key` and `web_mouse` are separate entries in
+  /// `hello.features` and a PC may have either without the other, so each half
+  /// of this tab greys on its own and the line names the half that is missing.
+  bool get _key => _client.supportsWebKey && !_keyRefused;
 
   @override
   void dispose() {
@@ -118,13 +174,18 @@ class _MousePadState extends State<MousePad> {
       return;
     }
     if (_inFlight >= 2) return; // the PC is behind: keep accumulating.
-    final double sx = _dx.clamp(-MousePad.maxStep, MousePad.maxStep);
-    final double sy = _dy.clamp(-MousePad.maxStep, MousePad.maxStep);
+    final double sx =
+        _dx.clamp(-MousePad.maxStep, MousePad.maxStep).toDouble();
+    final double sy =
+        _dy.clamp(-MousePad.maxStep, MousePad.maxStep).toDouble();
     _dx -= sx;
     _dy -= sy;
     _inFlight++;
     unawaited(
-      _client.webMouseMove(sx, sy).whenComplete(() => _inFlight--),
+      _client
+          .webMouseMove(sx, sy)
+          .then(_noteMouseRefusal)
+          .whenComplete(() => _inFlight--),
     );
   }
 
@@ -135,7 +196,7 @@ class _MousePadState extends State<MousePad> {
   void _click() {
     if (!_mouse) return;
     unawaited(HapticFeedback.lightImpact());
-    unawaited(_client.webMouseClick().then(_noteRefusal));
+    unawaited(_client.webMouseClick().then(_noteMouseRefusal));
   }
 
   /// A double tap is **Enter** (the user's own gesture list). Enter is the one
@@ -145,17 +206,36 @@ class _MousePadState extends State<MousePad> {
   /// same way on most pages.
   void _enter() {
     unawaited(HapticFeedback.lightImpact());
-    if (_client.supportsWebKey) {
-      unawaited(_client.webKey('Enter').then(_noteRefusal));
+    if (_key) {
+      unawaited(_client.webKey('Enter').then(_noteKeyRefusal));
       return;
     }
     if (!_mouse) return;
-    unawaited(_client.webMouseClick(count: 2).then(_noteRefusal));
+    unawaited(_client.webMouseClick(count: 2).then(_noteMouseRefusal));
   }
 
-  void _noteRefusal(RemoteReply reply) {
-    if (!mounted || reply.ok) return;
-    if (reply.code == 'unknown_command') setState(() => _refused = true);
+  // ── scrolling ─────────────────────────────────────────────────────────────
+
+  /// One press of one arrow: the page's own arrow key, once.
+  ///
+  /// Fire-and-forget like the moves, but with **no batching and no queue** —
+  /// these arrive at a human's tapping rate (a frantic thumb is still a handful
+  /// a second against the PC's 30/s budget), and a swallowed tap is something a
+  /// thumb notices, where a swallowed 40 ms of travel is not.
+  void _arrow(String key) {
+    if (!_key) return;
+    unawaited(HapticFeedback.lightImpact());
+    unawaited(_client.webKey(key).then(_noteKeyRefusal));
+  }
+
+  void _noteMouseRefusal(RemoteReply reply) {
+    if (!mounted || reply.ok || reply.code != 'unknown_command') return;
+    setState(() => _mouseRefused = true);
+  }
+
+  void _noteKeyRefusal(RemoteReply reply) {
+    if (!mounted || reply.ok || reply.code != 'unknown_command') return;
+    setState(() => _keyRefused = true);
   }
 
   // ── the pad ───────────────────────────────────────────────────────────────
@@ -165,22 +245,31 @@ class _MousePadState extends State<MousePad> {
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         // Dynamic sizing:
-        // Height = 70% of phone's full screen height, clamped to available room
+        // Height = 60% of the phone's full screen height, clamped to the room
+        //          left once the arrow row and the caption have taken theirs
         // Width  = 100% of the screen width
-        // Caption = 26 dp reserved for the "Mouse" line underneath
-        final double screenHeight = MediaQuery.sizeOf(context).height;
-        final double screenWidth = MediaQuery.sizeOf(context).width;
-        const double caption = 26.0;
+        //
+        // The row's room is subtracted *before* the clamp rather than taken out
+        // of whatever the pad left over, so a short screen (landscape, a small
+        // phone) shrinks the pad instead of pushing the arrows off the tab —
+        // and the tab still never scrolls, because a scrolling parent would
+        // fight the pad's own drag for the gesture arena.
+        final Size screen = MediaQuery.sizeOf(context);
+        final double reserved =
+            MousePad.arrowSize + MousePad.controlsGap + MousePad.caption;
+        final double targetHeight = screen.height > 0
+            ? screen.height * MousePad.heightFactor
+            : 260.0;
         final double maxRoom = constraints.maxHeight.isFinite
-            ? (constraints.maxHeight - caption).clamp(60.0, double.infinity)
-            : (screenHeight > 0 ? screenHeight * 0.70 : 260.0);
-        final double targetHeight =
-            screenHeight > 0 ? screenHeight * 0.70 : 260.0;
+            ? (constraints.maxHeight - reserved)
+                .clamp(60.0, double.infinity)
+                .toDouble()
+            : targetHeight;
         final double padHeight =
             targetHeight > maxRoom ? maxRoom : targetHeight;
         final double padWidth = constraints.maxWidth.isFinite
             ? constraints.maxWidth
-            : (screenWidth > 0 ? screenWidth : 320.0);
+            : (screen.width > 0 ? screen.width : 320.0);
 
         return Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -189,6 +278,23 @@ class _MousePadState extends State<MousePad> {
               width: padWidth,
               height: padHeight,
               child: _pad(),
+            ),
+            const SizedBox(height: MousePad.controlsGap),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: <Widget>[
+                _arrowButton(
+                  icon: Icons.keyboard_arrow_up,
+                  label: 'Scroll up',
+                  keyName: 'ArrowUp',
+                ),
+                const SizedBox(width: MousePad.arrowGap),
+                _arrowButton(
+                  icon: Icons.keyboard_arrow_down,
+                  label: 'Scroll down',
+                  keyName: 'ArrowDown',
+                ),
+              ],
             ),
             const SizedBox(height: 10),
             Text(_line, style: Theme.of(context).textTheme.bodySmall),
@@ -230,9 +336,70 @@ class _MousePadState extends State<MousePad> {
     );
   }
 
+  /// One scroll seat. Round, hairline-bordered, the pad's own gradient — a
+  /// thumb target that belongs to the trackpad, not a toolbar glyph.
+  ///
+  /// When the PC has no `web_key` the seat is greyed rather than hidden, and
+  /// the line under it says why: a button that vanishes is a button the user
+  /// keeps looking for, and one that silently does nothing is worse than both.
+  Widget _arrowButton({
+    required IconData icon,
+    required String label,
+    required String keyName,
+  }) {
+    final bool live = _key;
+    return Semantics(
+      button: true,
+      enabled: live,
+      label: label,
+      child: Tooltip(
+        message: label,
+        child: GestureDetector(
+          onTap: live ? () => _arrow(keyName) : null,
+          child: Container(
+            width: MousePad.arrowSize,
+            height: MousePad.arrowSize,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: live
+                  ? const LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: <Color>[
+                        AppColors.surfaceHighlight,
+                        AppColors.surface,
+                      ],
+                    )
+                  : null,
+              color: live ? null : AppColors.surface,
+              border: Border.all(
+                color:
+                    live ? AppColors.surfaceOutline : AppColors.statusUnknown,
+                width: 1.4,
+              ),
+            ),
+            child: Icon(
+              icon,
+              size: 32,
+              color: live ? AppColors.iconIdle : AppColors.statusUnknown,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   /// The one line. It names the thing, and — only when the PC cannot do it —
   /// says so, because a pad that silently does nothing is the one outcome worth
-  /// a sentence.
-  String get _line =>
-      _mouse ? 'Mouse' : 'Mouse needs an updated SALU on the PC';
+  /// a sentence. Each half of the tab is promised separately, so the sentence
+  /// names the half that is missing.
+  String get _line {
+    if (_mouse && _key) return 'Mouse';
+    if (!_mouse) {
+      return _key
+          ? 'Mouse needs an updated SALU on the PC'
+          : 'Mouse and scroll need an updated SALU on the PC';
+    }
+    return 'Scroll needs an updated SALU on the PC';
+  }
 }

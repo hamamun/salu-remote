@@ -420,9 +420,11 @@ is not in the picture — and the tab becomes a **mouse pad** instead (§6.0).
 > remove this and everything. after removing it will be mouse pad as laptop has a nice
 > bounding box will be shown which will be track pad. by touching there will activate mouse
 > at salu and double tap will be enter. below track pad will be simple one line."*
-> So: no arrows, no OK, no Esc chip, no focus card, no explanation — **a trackpad and one
-> line**. The `web_key` verbs (`ArrowUp` / `ArrowDown` / `Enter` / `Escape`) stay in the
-> protocol; the pad simply uses `Enter` for its double tap, and the PC keeps its focus ring.
+> So the old D-pad is gone — no ◀▶ page navigation, OK, Esc chip, focus card, or extra
+> explanation. The later up/down request adds only two ▲▼ seats under the pad, using the
+> page's existing arrow keys; these are not a return of the D-pad. `web_key` stays in the
+> protocol: double tap uses `Enter`, the seats use `ArrowUp` / `ArrowDown`, and `Escape`
+> keeps its documented job on the PC.
 
 In Web mode there is no equalizer, no subtitle track and no audio track to choose. What there
 *is* is a web page the user cannot reach from the couch — so the tab hands them **the PC's own
@@ -431,34 +433,56 @@ pointer**, which is the thing that can reach everything on it.
 ```
 ┌────────────────────────────────┐
 │                                │
-│          the trackpad          │ ← 100% screen width, 70% screen height
+│          the trackpad          │ ← 100% screen width, 60% screen height
 │       (round-cornered box)     │   dynamic sizing, thin border (1.4 dp)
 │                                │
 └────────────────────────────────┘
+              (▲)  (▼)            ← scroll the page: two 56 dp round seats
               Mouse                ← the one line, and nothing else
 ```
 
 **Sizing and shape (dynamic):**
 - **Width:** 100% of the screen width (`constraints.maxWidth`).
-- **Height:** 70% of the phone's full screen height (`screenHeight * 0.70`),
-  capped dynamically to the tab's available height minus the 26 dp caption reservation
-  so that smaller phones and landscape orientation never scroll or clip.
+- **Height:** 60% of the phone's full screen height (`screenHeight * 0.60` —
+  **was 70%** until the arrow row arrived, 2026-09-24), capped dynamically to
+  the tab's available height minus the 18 dp pad-to-row gap, 56 dp arrow row,
+  and 26 dp caption allowance. That room is subtracted **before** the clamp, so
+  on a short screen the pad shrinks to make room for the arrows.
 - **Corners and border:** Keeps rounded corners (`18 dp`) and a thin border (`1.4 dp`),
   maintaining the clean laptop-trackpad card appearance.
-- **Caption:** Preserves the `"Mouse"` line right underneath the pad (and the PC update
-  notice when `web_mouse` is unadvertised).
+- **Arrow row:** two round seats, `56 dp`, `18 dp` apart, `18 dp` under the pad,
+  in the pad's own gradient and hairline — part of the trackpad, not a toolbar.
+- **Caption:** Preserves the one `"Mouse"` line right underneath the arrow row (and the
+  PC update notice when `web_mouse` or `web_key` is unadvertised or answers `unknown_command`).
 
 | Gesture | Does | Verb |
 |---|---|---|
 | drag | the PC's pointer follows the thumb, live | **`web_mouse_move {dx, dy}`** (new, `remote.md` §17.14.3) |
 | single tap | left click, where the pointer already stands | **`web_mouse_click {button:"left", count:1}`** (new) |
 | double tap | **Enter** — activate whatever the page has focused | `web_key {key:"Enter"}` (§17.13.5) — a double click when the PC has no `web_key` |
+| **▲ / ▼** under the pad | **scroll the page** — the page's own arrow key, once per tap | `web_key {key:"ArrowUp"\|"ArrowDown"}` (§17.13.5) — greyed, never hidden, when the PC has no `web_key` |
 
-**The one line under the pad says `Mouse`.** That is the whole text budget of this tab. The
-only time it says anything else is the honest one: when the PC has not advertised `web_mouse`
-(or answered `unknown_command` for it), it reads *"Mouse needs an updated SALU on the PC"* —
-still one line, still the same box in the same place. A pad that silently does nothing is the
-one outcome worth a sentence; everything else is noise in front of a page.
+**The scroll arrows, and what they honestly do** (user, 2026-09-24). They cost
+nothing on the PC: the old D-pad's `ArrowUp`/`ArrowDown` stayed in the protocol
+and stayed implemented when the D-pad was deleted — only their seat on the phone
+went away. That is why they were reused rather than specified as a new verb, and
+it is also their limit: on the PC these keys are a **focus walk** ("next
+focusable element, `scrollIntoView`, `focus()`", §17.13.5), not a measured
+scroll step. On an ordinary page that reads as scrolling, because the page keeps
+the focused element centred; in a text field the arrows move the caret, and a
+page with nothing focusable may do nothing. **One tap is one key, with no
+hold-to-repeat on purpose** — repeated focus walks can race through the page's
+focus order instead of giving the user a measured scroll step. A wheel verb
+(`web_mouse_scroll`) is the right next step if this feels jumpy on real sites; it
+is PC work, and this section is phone work.
+
+**The one line under the arrow row says `Mouse`.** That is the whole text budget of this tab. The
+only time it says anything else is the honest one: `web_mouse` and `web_key` are promised
+separately in `hello.features`, so the line names whichever half is missing — *"Mouse needs
+an updated SALU on the PC"*, *"Scroll needs an updated SALU on the PC"*, or both — still one
+line, still the same box in the same place. A pad that silently does nothing is the one
+outcome worth a sentence; everything else is noise in front of a page.
+
 
 **Why the gestures are these.** A trackpad's tap-to-click is the gesture the hand already
 knows, and Enter is what a page's own focus model understands everywhere — YouTube's player,
@@ -475,7 +499,8 @@ pointer instead of queuing stale movement behind it.
 
 **Honest limits.** A mouse is exactly as good as the PC's ability to inject input. Where it
 cannot (a locked session, a build without the input path) the pad says so in its line and the
-user still has the Play tab's own controls. Nothing is faked.
+user still has the Play tab's own controls. The arrows are exactly as good as the site's own
+markup (§17.13.5's honest limits, unchanged). Nothing is faked.
 
 **Implementation.** `remote.md` §17.14.3; the phone side is `lib/ui/mouse_pad.dart`, and
 `lib/ui/dpad.dart` is deleted.

@@ -49,6 +49,7 @@ rework.
 | 4 | *"when i am typing url then press open tab its opening blank tab"* | phone (built — `web_url.dart` adds the scheme) **and PC** (C5 — `web_tab_new` must navigate inside the new tab) |
 | 5 | *"web saved pages … also showing m3u list from player section … only bookmark should show"* | phone only (built — the sheet lists bookmarks alone) |
 | 6 | Tune tab, Web mode: the D-pad out, a laptop-style **trackpad** in — *"by touching there will activate mouse at salu and double tap will be enter"* | **PC** (C3) + phone (built — `mouse_pad.dart`) |
+| 7 | Tune tab, Web mode: *"reduce the mouse pad height to 60 % and below that … add a scroll button or up/down arrow button that will work as keyboard up/down arrow"* | **phone only (built)** — `mouse_pad.dart`: 70% → 60%, plus ▲▼ seats on the existing `web_key` arrows — see the note at the end of C3 |
 
 Everything the phone needed for 3, 5 and half of 4 is done and testable today. 1, 2, 3's tail
 (`web_tabs_get`), 4's tail, 6 and the bookmark half of 5 need code in `hamamun/Salu`.
@@ -117,7 +118,8 @@ Then **advertise `web_fullscreen`** in `hello.features`.
 
 ## C3. The trackpad — `web_mouse_move` / `web_mouse_click`
 
-The phone's Tune tab is now a trackpad and one line (`mouse_pad.dart`). It sends, and expects
+The phone's Tune tab is now a trackpad, two scroll seats and one line
+(`mouse_pad.dart`). It sends, and expects
 the PC to obey:
 
 | Verb | Args | Meaning |
@@ -151,6 +153,20 @@ look at). This is part of C3, not a nicety: it is the only feedback the user get
 **Rate.** Movement is ~25 cmd/s; the per-device budget is 30/s (§6.2) and the phone's own
 web-media poll is 1/s. Leave the budget alone rather than raising it — the phone's batching is
 what keeps this inside it.
+
+**No PC work for the scroll arrows (2026-09-24).** The phone's Tune tab now also has two
+scroll seats under the pad, and they send `web_key {key:"ArrowUp"|"ArrowDown"}` — the D-pad's
+old keys, already specified (§17.13.5) and already implemented by A3. Nothing here changes:
+no new verb, no new flag, no new error. The only thing to check on the PC is that
+`web_key` really is in `hello.features` (A6), because a build that omits it gets greyed seats
+and the phone names the missing feature(s) in its one-line caption.
+
+If these seats turn out to feel jumpy on real sites — remember they walk focus rather than
+scrolling a measured step — the answer is a wheel verb, and it belongs here beside the rest of
+the input path: `web_mouse_scroll {dy}` as `SendInput` + `MOUSEEVENTF_WHEEL` in
+`remote_input_service.dart` (120 = one detent, same ±clamp and same non-blocking rule as the
+moves), advertised as `web_scroll`. Not built, not ordered — noted so the next request does
+not have to rediscover where it goes.
 
 ## C4. Add-only bookmarks — `web_bookmark_add`
 

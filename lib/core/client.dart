@@ -1069,17 +1069,15 @@ class SaluClient {
 
   /// Keys into the page (`remote_apk_ui.md` §6.0, `remote.md` §17.14).
   ///
-  /// The mouse pad's **double tap** is the one seat left that uses this:
-  /// `Enter` activates whatever the page has focused, which is what the user
-  /// asked a double tap to mean. (The old D-pad's ▲▼ / Esc / OK keys are still
-  /// in the protocol and still answered by the PC — the phone simply has no
-  /// seat for them any more.)
+  /// The Tune tab's **double tap** sends `Enter`; its two scroll seats send
+  /// `ArrowUp` and `ArrowDown`. Those arrows reuse the old D-pad keys, which
+  /// remain in the protocol and are still answered by the PC. `Escape` also
+  /// remains available to PC-side callers, but has no Tune-tab seat.
   ///
   /// `web_key` is specified but **not implemented on every PC** — an older
   /// `remote_command_handler.dart` answers `unknown_command`. The pad checks
-  /// `supportsWebKey` before it relies on it, and a double tap becomes a double
-  /// click when the promise is missing, so a half-built PC never has a dead
-  /// gesture.
+  /// `supportsWebKey` before relying on it: double tap becomes a double click
+  /// when the promise is missing, and the scroll seats are disabled.
   ///
   /// A PC that implements it answers with the page's focus in the ack —
   /// `{focus:{label, tag, index, count, editable}}` — which is what keeps the

@@ -1505,7 +1505,7 @@ on an older PC too, at the cost of possibly a new tab.
 
 The D-pad is gone from the phone (its `web_key` verbs stay: the double tap still sends
 `Enter`, and Esc keeps its documented job on the PC). The Tune tab in Web mode is now **a
-trackpad and one line**, and it drives **the PC's own pointer** — the real cursor, moving
+trackpad, two scroll arrows and one line**, and it drives **the PC's own pointer** — the real cursor, moving
 across the real screen, which is the only feedback that makes a pointer feel like a pointer.
 
 | Verb | Args | Reply | PC call |
@@ -1534,6 +1534,31 @@ The phone's gestures, for the record: **drag = move**, **single tap = left click
 **double tap = Enter** (the user's own choice — `web_key {key:"Enter"}`, so a page that
 manages its own focus still gets a real activation; a PC without `web_key` gets a double
 click instead).
+
+**Two scroll seats under the pad (added 2026-09-24 — phone-only, no new verb).** The user
+asked for up/down buttons that scroll the page, and for the pad to shrink from 70% to 60% of
+screen height to make room for them. Both are done on the phone alone:
+
+| Seat | Args | Meaning |
+|---|---|---|
+| ▲ / ▼ under the pad | `web_key {key:"ArrowUp"\|"ArrowDown"}` | the page's own arrow key, once per tap — **§17.13.5 semantics unchanged** |
+
+- **No PC change, and no new feature flag.** The arrows are the old D-pad's keys, still
+  specified and still implemented; only their seat on the phone was missing. A build that
+  advertises `web_key` accepts these focus-walk arrows; one that does not gets greyed seats,
+  and the one-line caption names the missing feature(s). `web_mouse` and `web_key` are now tracked as
+  **separate** promises on the phone, so a `web_key` refusal no longer silences the trackpad.
+- **This is a focus walk, not a scroll step** (§17.13.5), which is the honest trade for
+  costing nothing: on an ordinary page the page scrolls to keep the focused element centred;
+  in a text field the arrows move the caret, and a page with nothing focusable may not move.
+  One tap = one key, and **no hold-to-repeat** — repeated focus walks can race through the
+  page's focus order instead of giving a measured scroll step.
+- **If this proves jumpy on real sites**, the fix is a wheel verb (`web_mouse_scroll {dy}`,
+  `SendInput` + `MOUSEEVENTF_WHEEL` in `remote_input_service.dart`, advertised as
+  `web_scroll`) — a few lines beside the trackpad's existing input path, but PC work, and so
+  a separate work order in `pc_part.md`.
+- **Rate.** Human tapping, a few commands a second at worst — no batching, no queue, and
+  nothing taken from the 30 cmd/s budget the trackpad's 25/s already lives inside.
 
 #### 17.14.4 Add-only bookmarking — `web_bookmark_add`
 

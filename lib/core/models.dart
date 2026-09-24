@@ -1091,6 +1091,7 @@ class WebMediaInfo {
     this.volume = 100,
     this.muted = false,
     this.canFullscreen = false,
+    this.fullscreen = false,
     this.seekable = false,
     this.dialect = WebMediaDialect.contract,
     this.raw = const <String, Object?>{},
@@ -1117,6 +1118,10 @@ class WebMediaInfo {
       volume: _webPercent(rawVolume, volumeUnit),
       muted: _b(raw['muted']),
       canFullscreen: _b(raw['canFull']) || _b(raw['canFullscreen']),
+      // The element's *current* fullscreen state, when the PC reports it: the
+      // fullscreen seat's icon reads this (plus the snapshot's `web.fullscreen`
+      // and `window.fullscreen`), so the mark is never a guess.
+      fullscreen: _b(raw['fullscreen']) || _b(raw['isFullscreen']),
       // The PC may say so outright; otherwise a page player is seekable
       // exactly when it knows how long it is — a live stream never does.
       seekable: rawSeekable is bool ? rawSeekable : duration > Duration.zero,
@@ -1134,6 +1139,11 @@ class WebMediaInfo {
   final int volume;
   final bool muted;
   final bool canFullscreen;
+
+  /// Whether the page's player is in element fullscreen *right now*
+  /// (`web_media_get`'s `fullscreen`). A PC that does not send it leaves this
+  /// false and the phone falls back to the snapshot's `web.fullscreen`.
+  final bool fullscreen;
   final bool seekable;
   final WebMediaDialect dialect;
 
@@ -1153,6 +1163,7 @@ class WebMediaInfo {
       other.volume == volume &&
       other.muted == muted &&
       other.canFullscreen == canFullscreen &&
+      other.fullscreen == fullscreen &&
       other.seekable == seekable &&
       other.dialect == dialect;
 
@@ -1165,6 +1176,7 @@ class WebMediaInfo {
         volume,
         muted,
         canFullscreen,
+        fullscreen,
         seekable,
         dialect,
       );
@@ -1358,8 +1370,10 @@ List<WebBookmarkInfo> webBookmarksFrom(Map<String, Object?> raw) =>
         .map(WebBookmarkInfo.from)
         .toList(growable: false);
 
-/// What the page has focused right now, so the D-pad is not steered blind
-/// (`remote_apk_ui.md` §6.0). Rides the `web_key` ack and `web_focus_get`.
+/// What the page has focused right now, so the keys the phone sends into the
+/// page (`web_key` — the mouse pad's Enter, and the PC's own Esc path) are not
+/// sent blind (`remote_apk_ui.md` §6.0, `remote.md` §17.14). Rides the
+/// `web_key` ack and `web_focus_get`.
 class WebFocusInfo {
   const WebFocusInfo({
     this.label,
@@ -1451,8 +1465,10 @@ abstract final class RemoteFeature {
   /// the reply itself ([WebMediaInfo.from]).
   static const String webMediaUnit = 'web_media_unit';
 
-  /// Focus walking for the D-pad: `web_key` and `web_focus_get`, with the ring
-  /// drawn on the page (`remote_apk_ui.md` §6.0).
+  /// Keys into the page, with the ring drawn on whatever holds the focus:
+  /// `web_key` and `web_focus_get` (`remote_apk_ui.md` §6.0). The D-pad that
+  /// used these is gone (2026-09-24) — the mouse pad's double tap is still
+  /// `Enter`, and the ring is still what makes the PC's focus visible.
   static const String webKey = 'web_key';
 
   /// The browser's tab strip, mirrored: `web_tabs_get`, `web_tab_activate`,
@@ -1463,6 +1479,32 @@ abstract final class RemoteFeature {
   /// (`remote.md` §17.13).
   static const String webBookmarks = 'web_bookmarks';
 
+  // ── added 2026-09-24 (the user's five web complaints + the mouse) ─────────
+
+  /// A working **Home** button: `browser_nav {action:"home"}` takes the loaded
+  /// page to its own site's front page in the *same* tab (`remote.md` §17.14).
+  /// Without it the phone falls back to the URL the site's origin implies.
+  static const String webHome = 'web_home';
+
+  /// **One fullscreen button, and the PC decides**: `web_fullscreen` puts the
+  /// page's own player fullscreen when there is one, the SALU window when
+  /// there is not, and answers which it did (§17.14). Without it the phone
+  /// keeps choosing between `web_media_fullscreen` and `fullscreen_toggle`
+  /// itself — the split that made YouTube do nothing and other streams
+  /// fullscreen the whole app.
+  static const String webFullscreen = 'web_fullscreen';
+
+  /// The **trackpad**: `web_mouse_move` / `web_mouse_click` move and click the
+  /// PC's own pointer (§17.14). Without it the Tune tab's pad is inert and
+  /// says so in its one line.
+  static const String webMouse = 'web_mouse';
+
+  /// **Add-only bookmarking**: `web_bookmark_add` appends the page being looked
+  /// at to the PC browser's bookmarks. Never a rename, never a delete — a phone
+  /// that can rewrite the bookmark bar can lose it (§17.13.4). Without it
+  /// "Save this page" writes into SALU's own saved list instead.
+  static const String webBookmarkAdd = 'web_bookmark_add';
+
   /// Every name above, for the diagnostics sheet — the phone says which of
   /// its own doors the PC has opened.
   static const List<String> all = <String>[
@@ -1470,5 +1512,9 @@ abstract final class RemoteFeature {
     webKey,
     webTabs,
     webBookmarks,
+    webHome,
+    webFullscreen,
+    webMouse,
+    webBookmarkAdd,
   ];
 }

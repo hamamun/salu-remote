@@ -910,8 +910,47 @@ class SaluClient {
       send('fullscreen_set', args: <String, Object?>{'on': on});
   Future<RemoteReply> browserNav(String action) =>
       send('browser_nav', args: <String, Object?>{'action': action});
+
+  /// **Home** (§17.14): the loaded page goes to its own site's front page, in
+  /// the same tab. The PC knows what "home" means for its browser (its own
+  /// home setting, else the current URL's origin); the phone only presses it.
+  Future<RemoteReply> browserHome() =>
+      send('browser_nav', args: <String, Object?>{'action': 'home'});
+
   Future<RemoteReply> browserOpen(String url) =>
       send('browser_open', args: <String, Object?>{'url': url});
+
+  /// **One fullscreen button, and the PC decides** (§17.14) — the page's own
+  /// player when it has one, the SALU window when it has not. This replaces the
+  /// phone's old split (`web_media_fullscreen` vs `fullscreen_toggle`), which
+  /// is exactly what made YouTube do nothing while other streams fullscreened
+  /// the whole application.
+  Future<RemoteReply> webFullscreen() => send('web_fullscreen');
+
+  // ── the trackpad (`remote.md` §17.14) ─────────────────────────────────────
+  //
+  // Relative pointer movement and clicks on the **PC's own pointer**, so the
+  // user watches the real cursor cross the real screen. The phone sends the
+  // thumb's travel already in the PC's units (CSS pixels), batched to ~25
+  // commands a second by `MousePad`; the PC moves the cursor by exactly that.
+  // Movement is fire-and-forget — a lost 20 ms of travel is invisible, and an
+  // answer per packet would double the traffic for nothing.
+
+  Future<RemoteReply> webMouseMove(double dx, double dy) => send(
+        'web_mouse_move',
+        args: <String, Object?>{'dx': dx.round(), 'dy': dy.round()},
+        timeout: const Duration(seconds: 4),
+      );
+
+  Future<RemoteReply> webMouseClick({String button = 'left', int count = 1}) =>
+      send(
+        'web_mouse_click',
+        args: <String, Object?>{
+          'button': button,
+          'count': count.clamp(1, 2).toInt(),
+        },
+        timeout: const Duration(seconds: 4),
+      );
 
   // ── the page's own player (`remote.md` §17.11) ────────────────────────────
   //
@@ -985,7 +1024,7 @@ class SaluClient {
   // The lists never ride the snapshot — a strip of 40 tabs would eat the whole
   // 8 KB frame budget — so each is one request, answered from the PC's own tab
   // strip. Both families sit behind `web_tabs` / `web_bookmarks`, and an older
-  // PC still gets useful doors rather than dead buttons (`WebTabsSheet`).
+  // PC still gets useful doors rather than dead buttons (`web_tabs_card.dart`).
 
   Future<RemoteReply> webTabsGet() => send('web_tabs_get');
 
@@ -1005,17 +1044,36 @@ class SaluClient {
 
   Future<RemoteReply> webBookmarksGet() => send('web_bookmarks_get');
 
-  /// The D-pad (`remote_apk_ui.md` §6.0).
+  /// **Add-only** bookmarking (§17.13.4, §17.14): append the page being looked
+  /// at to the PC browser's bookmarks so it shows up in ☆ Saved pages itself.
+  /// There is deliberately no rename and no delete — the phone can add to the
+  /// PC's bookmark bar, never rewrite or empty it.
+  Future<RemoteReply> webBookmarkAdd(String url, {String? name}) => send(
+        'web_bookmark_add',
+        args: <String, Object?>{
+          'url': url,
+          if (name != null && name.trim().isNotEmpty) 'name': name.trim(),
+        },
+        timeout: const Duration(seconds: 12),
+      );
+
+  /// Keys into the page (`remote_apk_ui.md` §6.0, `remote.md` §17.14).
+  ///
+  /// The mouse pad's **double tap** is the one seat left that uses this:
+  /// `Enter` activates whatever the page has focused, which is what the user
+  /// asked a double tap to mean. (The old D-pad's ▲▼ / Esc / OK keys are still
+  /// in the protocol and still answered by the PC — the phone simply has no
+  /// seat for them any more.)
   ///
   /// `web_key` is specified but **not implemented on every PC** — an older
-  /// `remote_command_handler.dart` answers `unknown_command`. The phone hides
-  /// the ▲ ▼ / OK keys until the PC advertises `web_key` in `hello.features`
-  /// and draws the ◀ ▶ pair either way (plain `browser_nav`, which every PC
-  /// has), so a half-built PC never shows a dead button.
+  /// `remote_command_handler.dart` answers `unknown_command`. The pad checks
+  /// `supportsWebKey` before it relies on it, and a double tap becomes a double
+  /// click when the promise is missing, so a half-built PC never has a dead
+  /// gesture.
   ///
   /// A PC that implements it answers with the page's focus in the ack —
-  /// `{focus:{label, tag, index, count, editable}}` — and the pad draws that
-  /// line, because steering a browser blind is worse than not steering it.
+  /// `{focus:{label, tag, index, count, editable}}` — which is what keeps the
+  /// keys honest, and what `webFocusGet` re-reads without moving it.
   Future<RemoteReply> webKey(String key) =>
       send('web_key', args: <String, Object?>{'key': key});
 
@@ -1030,4 +1088,8 @@ class SaluClient {
   bool get supportsWebKey => supports(RemoteFeature.webKey);
   bool get supportsWebTabs => supports(RemoteFeature.webTabs);
   bool get supportsWebBookmarks => supports(RemoteFeature.webBookmarks);
+  bool get supportsWebHome => supports(RemoteFeature.webHome);
+  bool get supportsWebFullscreen => supports(RemoteFeature.webFullscreen);
+  bool get supportsWebMouse => supports(RemoteFeature.webMouse);
+  bool get supportsWebBookmarkAdd => supports(RemoteFeature.webBookmarkAdd);
 }

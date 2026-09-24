@@ -57,6 +57,8 @@ abstract final class RemoteErrorCopy {
         return 'Tab control needs an updated SALU on the PC.';
       case 'no_web_bookmarks':
         return 'The PC\'s browser has no bookmarked pages.';
+      case 'no_web_mouse':
+        return "The PC couldn't move its pointer.";
       case 'busy':
         return 'The PC is busy — try again in a moment.';
       case 'library_full':
@@ -90,9 +92,9 @@ abstract final class RemoteErrorCopy {
 
   /// The empty-state line for each dead-end screen (§7's table, as a function).
   ///
-  /// Web mode has no empty state any more (2026-09-23): the Tune tab becomes a
-  /// D-pad that draws only the keys the PC answers, so the honest line lives in
-  /// the pad itself rather than here.
+  /// Web mode has no empty state any more (2026-09-24): the Tune tab *is* the
+  /// mouse pad, and the pad's own single line under it is the only place that
+  /// ever says anything about it.
   static String emptyTune(SaluSnapshot? snapshot) {
     if (snapshot == null) return 'Waiting for your PC…';
     if (!snapshot.playback.hasSomething) return 'Nothing is playing';

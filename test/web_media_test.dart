@@ -338,5 +338,46 @@ void main() {
       expect(old.features.contains(RemoteFeature.webKey), isFalse);
       expect(RemoteFeature.all, contains(RemoteFeature.webMediaUnit));
     });
+
+    test('the 2026-09-24 promises are in the list', () {
+      // Home, the one fullscreen seat, the trackpad and add-only bookmarking:
+      // a PC that implements them says so, and the phone draws accordingly.
+      expect(RemoteFeature.all, contains(RemoteFeature.webHome));
+      expect(RemoteFeature.all, contains(RemoteFeature.webFullscreen));
+      expect(RemoteFeature.all, contains(RemoteFeature.webMouse));
+      expect(RemoteFeature.all, contains(RemoteFeature.webBookmarkAdd));
+    });
+  });
+
+  group('the element\'s own fullscreen state', () {
+    test('a PC that reports it is believed — the seat\'s mark reads it', () {
+      final WebMediaInfo info = WebMediaInfo.from(<String, Object?>{
+        'found': true,
+        'canFull': true,
+        'fullscreen': true,
+      });
+
+      expect(info.fullscreen, isTrue);
+      expect(info.canFullscreen, isTrue);
+    });
+
+    test('a PC that does not is not guessed at', () {
+      // Without the field the mark falls back to the snapshot's own
+      // `web.fullscreen`; a false here is "not told", never "not full".
+      final WebMediaInfo info = WebMediaInfo.from(<String, Object?>{
+        'found': true,
+        'canFull': true,
+      });
+
+      expect(info.fullscreen, isFalse);
+      expect(info.canFullscreen, isTrue);
+    });
+
+    test('the dialect spelling is accepted too', () {
+      expect(
+        WebMediaInfo.from(<String, Object?>{'isFullscreen': true}).fullscreen,
+        isTrue,
+      );
+    });
   });
 }

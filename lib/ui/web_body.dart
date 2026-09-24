@@ -7,8 +7,10 @@ import 'package:flutter/services.dart';
 import '../core/client.dart';
 import '../core/models.dart';
 import '../core/reply.dart';
+import '../core/web_url.dart';
 import 'theme.dart';
 import 'web_sheets.dart';
+import 'web_tabs_card.dart';
 import 'widgets.dart';
 
 /// The Play tab in Web mode (`remote_apk_ui.md` §4.2): the same tab,
@@ -20,13 +22,33 @@ import 'widgets.dart';
 /// because that is all most online players expose. When the page has no
 /// reachable media, the nav body.
 ///
-/// Both shapes carry the **page doors** — new tab, the open-tab list, the saved
-/// pages — because those are navigation, not playback, and the couch user needs
-/// them whichever shape is up. Each door degrades instead of dying on a PC that
-/// has not been updated (`web_sheets.dart`).
+/// Both shapes carry the **page doors** — new tab, the saved pages — because
+/// those are navigation, not playback, and the couch user needs them whichever
+/// shape is up. Each door degrades instead of dying on a PC that has not been
+/// updated (`web_sheets.dart`).
 ///
 /// The media controls drive the *page's own player* (JavaScript on the PC side,
 /// `remote.md` §17.11) — never mpv, never the Windows volume.
+///
+/// **The user's five fixes, 2026-09-24** (`remote.md` §17.14):
+///
+/// 1. **One fullscreen button.** `web_fullscreen` lets the PC pick — the page's
+///    own player when the page has one, the SALU window when it has not — and
+///    the icon follows what actually happened. The old split (media found →
+///    `web_media_fullscreen`, else → `fullscreen_toggle`) is kept only as the
+///    fallback for a PC that has not been updated; it is what made YouTube do
+///    nothing while every other stream fullscreened the whole application.
+/// 2. **Home** sits at the left of the nav row: the loaded page goes to its own
+///    site's front page, same tab (`browser_nav {action:"home"}`). An older PC
+///    gets the origin of the current URL through `browser_open` instead.
+/// 3. **The open tabs are a section, not a button.** They live in
+///    [WebTabsCard] at the foot of the body — heading, count, chevron,
+///    remembered open/closed, exactly like the queue card. The `▢ 3 tabs` door
+///    that used to sit in the nav row is gone.
+/// 4. **A typed address gets a scheme** before it goes out (`web_url.dart`), so
+///    "youtube.com" stops arriving at the PC as a blank new tab.
+/// 5. **☆ Saved pages is bookmarks only** (`web_sheets.dart`) — SALU's own m3u
+///    list belongs to the player half of the app, not here.
 class WebBody extends StatefulWidget {
   const WebBody({super.key, required this.snapshot, required this.activeTab});
 
@@ -74,6 +96,21 @@ class _WebBodyState extends State<WebBody> {
   DateTime? _positionHoldUntil;
   int? _heldVolume;
   DateTime? _volumeHoldUntil;
+
+  // ── the fullscreen seat ───────────────────────────────────────────────────
+  //
+  // One button, and the PC decides what goes fullscreen (§17.14). The flip is
+  // optimistic like the sliders: the mark turns the moment the thumb lands, and
+  // the PC's own state takes it back as soon as the snapshot agrees — or after
+  // [_holdFor] if it never does.
+
+  bool? _fullscreenHold;
+  DateTime? _fullscreenHoldUntil;
+
+  /// The PC answered `unknown_command` for `browser_nav {action:"home"}`: it
+  /// advertised nothing, it refuses the verb, so the phone stops asking and
+  /// uses the URL fallback from then on.
+  bool _homeRefused = false;
 
   /// A seek bar being dragged scrubs the picture, so it streams slower than the
   /// Play tab's own bar: 4 sends a second is smooth enough to watch, is a third
@@ -181,8 +218,33 @@ class _WebBodyState extends State<WebBody> {
       }
     }
 
+    // The fullscreen hold lets go the moment the PC agrees with it — either
+    // half of the PC, because `web_fullscreen` may have chosen *either* the
+    // page's player or the SALU window — and always after [_holdFor].
+    final bool? heldFullscreen = _fullscreenHold;
+    if (heldFullscreen != null) {
+      final bool agreed = heldFullscreen == info.fullscreen ||
+          heldFullscreen == widget.snapshot.window.fullscreen;
+      final DateTime? until = _fullscreenHoldUntil;
+      final bool expired = until == null || !now.isBefore(until);
+      if (agreed || expired) {
+        _fullscreenHold = null;
+        _fullscreenHoldUntil = null;
+        settled = true;
+      }
+    }
+
     return settled;
   }
+
+  /// Fullscreen is on if **either** half of the PC says so: the page's own
+  /// player (`web_media_get`), or the SALU window (the snapshot) — which is
+  /// exactly the pair `web_fullscreen` chooses between.
+  bool get _fullscreenOn =>
+      _fullscreenHold ?? (_pageFullscreen || widget.snapshot.window.fullscreen);
+
+  bool get _pageFullscreen =>
+      (_media?.fullscreen ?? false) || widget.snapshot.web.fullscreen;
 
   void _holdPosition(Duration value) {
     _heldPosition = value;
@@ -236,18 +298,87 @@ class _WebBodyState extends State<WebBody> {
     unawaited(_guarded(() => _client.webMediaVolume(percent)));
   }
 
-  // ── the page doors ────────────────────────────────────────────────────────
+  // ── fullscreen, home: the two seats the PC now answers ────────────────────
 
-  Future<void> _openTabs() async {
-    final bool wantNew = await WebTabsSheet.show(context);
-    if (!mounted) return;
-    if (wantNew) {
-      await _urlDialog(newTab: true);
+  /// **One button** (§17.14). The PC decides what goes fullscreen: the page's
+  /// own player when the page has one, the SALU window when it has not, and its
+  /// ack says which. Until a PC advertises `web_fullscreen` the phone keeps the
+  /// old split — which is the behaviour this fix exists to remove, so it is a
+  /// fallback, not the design.
+  Future<void> _toggleFullscreen() async {
+    if (_client.supportsWebFullscreen) {
+      final bool wantOn = !_fullscreenOn;
+      setState(() {
+        _fullscreenHold = wantOn;
+        _fullscreenHoldUntil = DateTime.now().add(_holdFor);
+      });
+      final RemoteReply reply = await runRemote(context, _client.webFullscreen);
+      if (!mounted) return;
+      if (reply.ok) return;
+      if (reply.code == 'unknown_command' || reply.code == 'invalid_arguments') {
+        // A promise the PC could not keep — keep this press useful anyway.
+        setState(() {
+          _fullscreenHold = null;
+          _fullscreenHoldUntil = null;
+        });
+        await _legacyFullscreen();
+        return;
+      }
+      // Any other error: put the icon back where the PC says it is.
+      setState(() {
+        _fullscreenHold = null;
+        _fullscreenHoldUntil = null;
+      });
       return;
     }
-    // The strip may have moved under us — a tab closed, another activated.
-    unawaited(_pollOnce());
+    await _legacyFullscreen();
   }
+
+  /// The pre-§17.14 split, kept for an older PC: the page player when the page
+  /// has a reachable one, the SALU window otherwise.
+  Future<void> _legacyFullscreen() async {
+    final WebMediaInfo? media = _media;
+    if (media?.found == true && !_unreachable) {
+      await _guarded(_client.webMediaFullscreen);
+      return;
+    }
+    await runRemote(context, _client.fullscreenToggle);
+  }
+
+  /// Whether the fullscreen seat can do anything at all. With `web_fullscreen`
+  /// the PC always answers (it chooses the target itself, and the window can
+  /// always go fullscreen). Without it, the old rule stands: the page player
+  /// only when the PC said it could, the window otherwise — a mark that cannot
+  /// act is grey, as it was before.
+  bool get _fullscreenEnabled {
+    if (_client.supportsWebFullscreen) return true;
+    final WebMediaInfo? media = _media;
+    if (media?.found == true && !_unreachable) return media!.canFullscreen;
+    return true;
+  }
+
+  /// **Home** (§17.14): the loaded page goes to its own site's front page, in
+  /// the same tab — SALU's own home button, from the couch. A PC that does not
+  /// answer the action gets the site's origin through `browser_open`, so the
+  /// seat is never dead; `about:` pages and local files simply have no home to
+  /// go to, and the mark is grey there.
+  Future<void> _goHome() async {
+    if (_client.supportsWebHome && !_homeRefused) {
+      final RemoteReply reply = await runRemote(context, _client.browserHome);
+      if (!mounted) return;
+      if (reply.ok ||
+          (reply.code != 'unknown_command' &&
+              reply.code != 'invalid_arguments')) {
+        return;
+      }
+      _homeRefused = true;
+    }
+    final String? home = siteHome(widget.snapshot.web.url);
+    if (home == null) return;
+    unawaited(runRemote(context, () => _client.browserOpen(home)));
+  }
+
+  // ── the page doors ────────────────────────────────────────────────────────
 
   Future<void> _openPages() => SavedPagesSheet.show(
         context,
@@ -267,10 +398,12 @@ class _WebBodyState extends State<WebBody> {
     final WebMediaInfo? media = _media;
     final bool showMedia =
         _client.isOnline && media?.found == true && !_unreachable;
+    final bool canGoHome = _client.supportsWebHome ||
+        siteHome(web.url) != null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        _navRow(web, pageFullscreen: showMedia),
+        _navRow(web, canGoHome: canGoHome),
         const SizedBox(height: 2),
         _doorsRow(),
         const SizedBox(height: 12),
@@ -297,18 +430,43 @@ class _WebBodyState extends State<WebBody> {
             ),
           ],
         ],
+        const SizedBox(height: 14),
+        // The open tabs, at the foot of the body — a section with a heading and
+        // a chevron, like the queue card (§17.14). It sits in the body rather
+        // than in a sheet because a couch user switching tabs wants to see the
+        // page they are switching *to*, and a sheet covers exactly that.
+        WebTabsCard(
+          snapshot: widget.snapshot,
+          onNewTab: () => unawaited(_urlDialog(newTab: true)),
+          // Another tab is in front now: the player the seek bar was reading a
+          // moment ago is not the player on screen.
+          onTabChanged: () => unawaited(_pollOnce()),
+        ),
       ],
     );
   }
 
   // ── nav row ──────────────────────────────────────────────────────────────
 
-  /// One quiet row of page navigation. In the media shape the fullscreen
-  /// mark drives the page's player; in the nav shape it drives the SALU
-  /// window. The tab count at the end is a door, not a label.
-  Widget _navRow(SaluWeb web, {required bool pageFullscreen}) {
+  /// One quiet row of page navigation (user, 2026-09-24): **Home · Back ·
+  /// Forward · Reload · Fullscreen**, left to right, exactly as a browser's own
+  /// row reads. The `▢ 3 tabs` door that used to end this row has moved into
+  /// [WebTabsCard] at the foot of the body, and the fullscreen mark is now one
+  /// seat instead of two different ones.
+  ///
+  /// Home is an *addition*, not a replacement (user's own words): nothing that
+  /// worked here before has been taken away.
+  Widget _navRow(SaluWeb web, {required bool canGoHome}) {
     return Row(
       children: <Widget>[
+        IconButton(
+          tooltip: 'Home',
+          onPressed: canGoHome ? () => unawaited(_goHome()) : null,
+          icon: Icon(
+            Icons.home_outlined,
+            color: canGoHome ? AppColors.iconIdle : AppColors.statusUnknown,
+          ),
+        ),
         IconButton(
           tooltip: 'Back',
           onPressed: web.canBack
@@ -341,19 +499,15 @@ class _WebBodyState extends State<WebBody> {
           ),
         ),
         IconButton(
-          tooltip: pageFullscreen ? 'Page fullscreen' : 'Fullscreen',
-          onPressed: pageFullscreen
-              ? (_media?.canFullscreen ?? false)
-                  ? () => unawaited(_guarded(_client.webMediaFullscreen))
-                  : null
-              : () => unawaited(runRemote(context, _client.fullscreenToggle)),
+          tooltip: _fullscreenOn ? 'Exit fullscreen' : 'Fullscreen',
+          onPressed: _fullscreenEnabled
+              ? () => unawaited(_toggleFullscreen())
+              : null,
           icon: Icon(
-            pageFullscreen
-                ? (web.fullscreen ? Icons.fullscreen_exit : Icons.fullscreen)
-                : (widget.snapshot.window.fullscreen
-                    ? Icons.fullscreen_exit
-                    : Icons.fullscreen),
-            color: AppColors.iconIdle,
+            _fullscreenOn ? Icons.fullscreen_exit : Icons.fullscreen,
+            color: _fullscreenEnabled
+                ? AppColors.iconIdle
+                : AppColors.statusUnknown,
           ),
         ),
         const Spacer(),
@@ -366,43 +520,17 @@ class _WebBodyState extends State<WebBody> {
               child: CircularProgressIndicator(strokeWidth: 2),
             ),
           ),
-        _tabsDoor(web),
       ],
-    );
-  }
-
-  /// The tab count, and the way in to the strip behind it. It reads as a count
-  /// because that is what the snapshot always carries, and it opens the list
-  /// (switch · close · new) on a PC that advertises `web_tabs` — or the URL box
-  /// on one that does not, which is the single tab door every PC can honour.
-  Widget _tabsDoor(SaluWeb web) {
-    return Tooltip(
-      message: 'Open tabs',
-      child: InkWell(
-        borderRadius: BorderRadius.circular(10),
-        onTap: () => unawaited(_openTabs()),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(6, 7, 10, 7),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              const Icon(Icons.web_asset, size: 16, color: AppColors.iconIdle),
-              const SizedBox(width: 6),
-              Text(
-                '${web.tabs} ${web.tabs == 1 ? 'tab' : 'tabs'}',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 
   /// The two doors the nav row has no room for. Both work against a PC that has
   /// not been updated: "New tab" is the URL box (which becomes a real new tab
-  /// the moment the PC offers `web_tab_new`), and "Saved pages" is SALU's own
-  /// URL library until the PC mirrors its bookmarks.
+  /// the moment the PC offers `web_tab_new`), and "Saved pages" is the PC
+  /// browser's own bookmarks (`web_bookmarks`). The open-tab list has moved out
+  /// of this row and into [WebTabsCard] below; this chip stays because it is the
+  /// one new-tab door that works on *every* PC — the card's own ＋ is a bonus,
+  /// not a replacement.
   Widget _doorsRow() {
     return Wrap(
       spacing: 8,
@@ -602,6 +730,11 @@ class _WebBodyState extends State<WebBody> {
   /// advertises `web_tabs` it becomes a real `web_tab_new`, and everywhere else
   /// it stays `open_url`, which the PC already routes into its browser in Web
   /// mode (§17.4).
+  ///
+  /// **The text is normalised before it goes out** (`web_url.dart`, the
+  /// 2026-09-24 blank-tab fix): "youtube.com" is sent as
+  /// "https://youtube.com", because an address with no scheme is the one thing
+  /// a page loader cannot guess at — it opens a tab and then sits there empty.
   Future<void> _urlDialog({bool newTab = false}) async {
     final String current = widget.snapshot.web.url ?? '';
     String initial = '';
@@ -708,8 +841,8 @@ class _OpenUrlDialogState extends State<_OpenUrlDialog> {
         ),
         FilledButton(
           onPressed: () {
-            final String url = _textController.text.trim();
-            if (url.isEmpty) return;
+            final String? url = webAddress(_textController.text);
+            if (url == null) return;
             Navigator.of(context).pop(url);
           },
           child: Text(widget.newTab ? 'Open tab' : 'Open'),

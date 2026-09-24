@@ -20,8 +20,9 @@ import 'widgets.dart';
 /// D-pad of §6.0). There is no equalizer, no subtitle track and no audio track
 /// when what is playing is a web page — what there is, is a page the user
 /// cannot reach from the couch, and the honest answer to that is the PC's own
-/// pointer under a thumb. The tab is one trackpad and one line; everything that
-/// used to explain itself here is gone (`remote.md` §17.14).
+/// pointer under a thumb. The tab is one trackpad, two scroll arrows and one
+/// line; everything that used to explain itself here is gone
+/// (`remote.md` §17.14).
 class TuneTab extends StatefulWidget {
   const TuneTab({
     super.key,
@@ -83,10 +84,10 @@ class _TuneTabState extends State<TuneTab> {
       // mpv is not in the picture in Web mode: no equalizer, no subtitle
       // track, no audio track. What there is, is a page — and a pointer for it.
       //
-      // No scroll view: the tab holds exactly one thing, the pad sizes itself
-      // dynamically to 100% screen width and 70% screen height (`MousePad`),
-      // and a scrolling parent would only fight the pad's own drag for the
-      // gesture arena.
+      // No scroll view: the tab holds one thing — the pad, which sizes itself
+      // dynamically to 100% screen width and 60% screen height with the arrow
+      // row's room reserved underneath it (`MousePad`) — and a scrolling parent
+      // would only fight the pad's own drag for the gesture arena.
       return const MousePad();
     }
     if (snapshot.nothingPlaying) {

@@ -19,10 +19,20 @@ void main() {
     });
     await RemotePrefs.instance.load();
 
-    // flutter_test may install an HttpClient override that returns HTTP 400
-    // for every request. This test only talks to its own loopback PC fixture.
-    final HttpOverrides? originalHttpOverrides = HttpOverrides.global;
+    // flutter_test's binding installs an HttpClient override that answers every
+    // request with HTTP 400 (`_MockHttpOverrides`), which would also swallow the
+    // WebSocket upgrade below. This test only talks to its own loopback PC
+    // fixture, so the override is lifted for its duration and put back after.
+    //
+    // `HttpOverrides.global` is a setter with no getter, so the value to restore
+    // has to be read from `HttpOverrides.current` — reading `.global` does not
+    // compile.
+    final HttpOverrides? originalHttpOverrides = HttpOverrides.current;
     HttpOverrides.global = null;
+    // Guards the reasoning above: if a future flutter_test ever installs its
+    // mock in this test's zone instead, the loopback socket below would never
+    // be reached — fail here, where the reason is obvious.
+    expect(HttpOverrides.current, isNull);
     final HttpServer pc = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final List<Map<String, Object?>> commands = <Map<String, Object?>>[];
     pc.listen((HttpRequest request) async {

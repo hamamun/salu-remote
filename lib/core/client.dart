@@ -989,10 +989,20 @@ class SaluClient {
   /// `web_media_get`, already read into the phone's own units — `null` when the
   /// PC did not answer. The Web body polls this once a second and draws it; it
   /// never touches the wire shape.
+  ///
+  /// When the PC explicitly answers `no_web_media`, that is an affirmative
+  /// "no reachable media on this page/tab" rather than a dropped connection or
+  /// a missed beat. This returns [WebMediaInfo.none] so the body clears stale
+  /// controls instead of leaving dead buttons on screen (`remote.md` §17.4).
   Future<WebMediaInfo?> webMediaRead() async {
     final RemoteReply reply = await webMediaGet();
-    if (!reply.ok) return null;
-    return WebMediaInfo.from(reply.data, contractUnits: supportsWebMediaUnit);
+    if (reply.ok) {
+      return WebMediaInfo.from(reply.data, contractUnits: supportsWebMediaUnit);
+    }
+    if (reply.code == 'no_web_media') {
+      return WebMediaInfo.none;
+    }
+    return null;
   }
 
   Future<RemoteReply> webMediaToggle() => send('web_media_toggle');

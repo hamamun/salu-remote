@@ -82,7 +82,9 @@ class _WebTabsCardState extends State<WebTabsCard> {
 
   /// What the header shows before (or without) a list: the snapshot's own
   /// scalar, which every PC has always sent.
-  int get _count => _page?.count ?? widget.snapshot.web.tabs;
+  int get _count => widget.snapshot.web.tabsKnown
+      ? widget.snapshot.web.tabs
+      : (_page?.count ?? widget.snapshot.web.tabs);
 
   @override
   void initState() {
@@ -95,12 +97,14 @@ class _WebTabsCardState extends State<WebTabsCard> {
   void didUpdateWidget(covariant WebTabsCard oldWidget) {
     super.didUpdateWidget(oldWidget);
     // The strip moved under us — a tab opened, closed, or the page navigated.
-    // Only while the list is actually on screen: a collapsed card costs the PC
-    // nothing.
     final SaluWeb web = widget.snapshot.web;
     final SaluWeb old = oldWidget.snapshot.web;
     if (web.tabs != old.tabs || web.url != old.url) {
-      if (_expanded) unawaited(_refresh());
+      if (_expanded) {
+        unawaited(_refresh(force: true));
+      } else {
+        _page = null;
+      }
     }
   }
 

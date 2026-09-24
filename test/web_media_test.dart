@@ -379,5 +379,49 @@ void main() {
         isTrue,
       );
     });
+
+    test('WebMediaInfo.none has found:false', () {
+      expect(WebMediaInfo.none.found, isFalse);
+      expect(WebMediaInfo.none.playing, isFalse);
+      expect(WebMediaInfo.none.seekable, isFalse);
+    });
+  });
+
+  group('SaluWeb — tabsKnown and hasTabs', () {
+    test('explicit tabs:0 means no tabs are open', () {
+      final SaluWeb web = SaluWeb.from(<String, Object?>{
+        'title': 'Old Title',
+        'url': 'https://old.url',
+        'tabs': 0,
+      });
+
+      expect(web.tabsKnown, isTrue);
+      expect(web.tabs, 0);
+      expect(web.hasTabs, isFalse);
+    });
+
+    test('explicit tabs > 0 means tabs are open', () {
+      final SaluWeb web = SaluWeb.from(<String, Object?>{
+        'title': 'New Tab',
+        'tabs': 1,
+      });
+
+      expect(web.tabsKnown, isTrue);
+      expect(web.tabs, 1);
+      expect(web.hasTabs, isTrue);
+    });
+
+    test('omitted tabs falls back to title/url presence', () {
+      final SaluWeb withTitle = SaluWeb.from(<String, Object?>{
+        'title': 'Page Title',
+      });
+      final SaluWeb empty = SaluWeb.from(<String, Object?>{});
+
+      expect(withTitle.tabsKnown, isFalse);
+      expect(withTitle.hasTabs, isTrue);
+
+      expect(empty.tabsKnown, isFalse);
+      expect(empty.hasTabs, isFalse);
+    });
   });
 }

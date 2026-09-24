@@ -122,6 +122,10 @@ class _SavedPagesSheetState extends State<SavedPagesSheet> {
   bool _saving = false;
   String? _error;
 
+  /// The PC promised `web_bookmark_add` and then refused it. The sheet stops
+  /// offering it and says where the save actually goes instead.
+  bool _addRefused = false;
+
   /// The page on screen, when there is one worth saving.
   String? get _page => widget.currentUrl?.trim().isEmpty == true
       ? null
@@ -155,21 +159,38 @@ class _SavedPagesSheetState extends State<SavedPagesSheet> {
     });
   }
 
-  /// Save the page being looked at. Add-only, always: the browser's own
+  /// Save the page being looked at. **Add-only, always**: the browser's own
   /// bookmarks when the PC can take a line (`web_bookmark_add`), SALU's list
   /// otherwise — and the snackbar names which, every time.
+  ///
+  /// The fallback is the point. `unknown_command` is a *silent* code (the user
+  /// never sees it), so a promised-but-missing `web_bookmark_add` would swallow
+  /// the save and leave the user believing the page was kept. One press, one
+  /// saved page: if the bookmark store says no, the page goes to SALU's list and
+  /// the snackbar tells the user where to find it.
   Future<void> _saveThisPage() async {
     final String? url = _page;
     if (url == null || _saving) return;
     setState(() => _saving = true);
-    final bool toBookmarks = _client.supportsWebBookmarkAdd;
-    final RemoteReply reply = await runRemote(
+    bool toBookmarks = _client.supportsWebBookmarkAdd && !_addRefused;
+    RemoteReply reply = await runRemote(
       context,
       () => toBookmarks
           ? _client.webBookmarkAdd(url, name: widget.currentTitle)
           : _client.libraryAdd(url, name: widget.currentTitle, save: true),
     );
     if (!mounted) return;
+    if (!reply.ok &&
+        toBookmarks &&
+        (reply.code == 'unknown_command' || reply.code == 'invalid_arguments')) {
+      toBookmarks = false;
+      setState(() => _addRefused = true);
+      reply = await runRemote(
+        context,
+        () => _client.libraryAdd(url, name: widget.currentTitle, save: true),
+      );
+      if (!mounted) return;
+    }
     setState(() => _saving = false);
     if (!reply.ok) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -226,7 +247,7 @@ class _SavedPagesSheetState extends State<SavedPagesSheet> {
             if (page != null)
               _sheetNote(
                 context,
-                _client.supportsWebBookmarkAdd
+                _client.supportsWebBookmarkAdd && !_addRefused
                     ? 'Adds ${widget.currentTitle ?? page} to the PC browser\'s bookmarks.'
                     : 'Adds ${widget.currentTitle ?? page} to SALU\'s saved list.',
               ),

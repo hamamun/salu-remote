@@ -345,6 +345,18 @@ class _WebBodyState extends State<WebBody> {
     await runRemote(context, _client.fullscreenToggle);
   }
 
+  /// Whether the fullscreen seat can do anything at all. With `web_fullscreen`
+  /// the PC always answers (it chooses the target itself, and the window can
+  /// always go fullscreen). Without it, the old rule stands: the page player
+  /// only when the PC said it could, the window otherwise — a mark that cannot
+  /// act is grey, as it was before.
+  bool get _fullscreenEnabled {
+    if (_client.supportsWebFullscreen) return true;
+    final WebMediaInfo? media = _media;
+    if (media?.found == true && !_unreachable) return media!.canFullscreen;
+    return true;
+  }
+
   /// **Home** (§17.14): the loaded page goes to its own site's front page, in
   /// the same tab — SALU's own home button, from the couch. A PC that does not
   /// answer the action gets the site's origin through `browser_open`, so the
@@ -488,10 +500,14 @@ class _WebBodyState extends State<WebBody> {
         ),
         IconButton(
           tooltip: _fullscreenOn ? 'Exit fullscreen' : 'Fullscreen',
-          onPressed: () => unawaited(_toggleFullscreen()),
+          onPressed: _fullscreenEnabled
+              ? () => unawaited(_toggleFullscreen())
+              : null,
           icon: Icon(
             _fullscreenOn ? Icons.fullscreen_exit : Icons.fullscreen,
-            color: AppColors.iconIdle,
+            color: _fullscreenEnabled
+                ? AppColors.iconIdle
+                : AppColors.statusUnknown,
           ),
         ),
         const Spacer(),

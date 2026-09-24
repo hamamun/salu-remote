@@ -1441,7 +1441,7 @@ could *find* the page's player:
 
 | Verb | Args | Reply | Meaning |
 |---|---|---|---|
-| `web_fullscreen` | `{on?: bool}` | `ack {fullscreen: bool, target:"page"\|"window"}` | no `on` = toggle. `target:"page"` = the page's own player is (or went) fullscreen; `target:"window"` = the SALU window did |
+| `web_fullscreen` | `{on?: bool}` | `ack {fullscreen: bool, target:"page"\|"window"}` | **The phone sends it with no arguments — a toggle**; `{on}` is in the contract so any client (and the PC's own tests) can ask for one direction explicitly. `target:"page"` = the page's own player is (or went) fullscreen; `target:"window"` = the SALU window did |
 
 The PC's order of preference, and it must be this order:
 

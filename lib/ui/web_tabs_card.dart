@@ -104,8 +104,14 @@ class _WebTabsCardState extends State<WebTabsCard> {
     }
   }
 
+  /// One `web_tabs_get`, unless a read is already in flight and nobody is
+  /// waiting on it. A forced read (the card opened, a tab was switched or
+  /// closed) goes out even then — the generation counter below is what keeps a
+  /// late reply from an older read out of the list, so overlapping reads are
+  /// safe as long as the newest one is the one that wins.
   Future<void> _refresh({bool force = false}) async {
-    if (!_supported || _loading) return;
+    if (!_supported) return;
+    if (!force && _loading) return;
     if (!force && DateTime.now().difference(_lastFetch) < _minGap) return;
     _lastFetch = DateTime.now();
     final int generation = ++_generation;

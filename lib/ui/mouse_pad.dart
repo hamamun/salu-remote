@@ -70,7 +70,9 @@ class _MousePadState extends State<MousePad> {
   /// in the one line instead of pressing into the dark.
   bool _refused = false;
 
-  /// The pad's own size, from the tab's constraints (see [_box]).
+  /// The pad's own shape — a laptop trackpad's proportion. Its *size* comes
+  /// from whatever room the tab has left (see [build]), so the box is as large
+  /// as the screen allows and never scrolls.
   static const double _aspect = 1.5;
 
   bool get _mouse => _client.supportsWebMouse && !_refused;

@@ -428,6 +428,9 @@ class SaluClient {
     final ServerInfo info = ServerInfo.from(message);
     server.value = info;
     _sawHello = true;
+    // A new PC — or a restarted one — gets its units measured again: the
+    // contract until its first `web_media_get` reply says otherwise.
+    _webDialect = WebMediaDialect.contract;
     debugPrint('[SALU remote] hello from ${info.name} (PC ${info.version}, proto ${info.proto})');
     if (info.proto != protocolVersion) {
       // D7: a mismatched protocol is a clear error, never a half-working app.
@@ -910,32 +913,121 @@ class SaluClient {
   Future<RemoteReply> browserOpen(String url) =>
       send('browser_open', args: <String, Object?>{'url': url});
 
-  // The page's own player (`remote.md` §17.11) — never mpv, never the Windows
-  // volume.
-  Future<RemoteReply> webMediaGet() =>
-      send('web_media_get', timeout: const Duration(seconds: 6));
+  // ── the page's own player (`remote.md` §17.11) ────────────────────────────
+  //
+  // Never mpv, never the Windows volume: these drive the `<video>` element the
+  // PC's browser is showing.
+  //
+  // **Units.** Every screen speaks the house units — milliseconds and integer
+  // percent. The page player's own bridge does not always: JavaScript's
+  // `currentTime` is seconds and its `volume` is 0–1, and §17.11 was written
+  // from the JavaScript side without stating the wire unit. So the client
+  // measures what the PC actually said on the way in ([_webDialect], refreshed
+  // by every `web_media_get`) and answers in the same voice on the way out.
+  // That is this file's one rule — "the conversion from what a thumb did to
+  // what the PC wants happens here and nowhere else" — applied to the one
+  // place the protocol left a unit unstated.
+
+  WebMediaDialect _webDialect = WebMediaDialect.contract;
+
+  /// The units the PC's page-player bridge is speaking. The Web body's
+  /// diagnostics sheet shows it; nothing else needs to know.
+  WebMediaDialect get webDialect => _webDialect;
+
+  Future<RemoteReply> webMediaGet() async {
+    final RemoteReply reply =
+        await send('web_media_get', timeout: const Duration(seconds: 6));
+    if (reply.ok) {
+      final WebMediaInfo info =
+          WebMediaInfo.from(reply.data, contractUnits: supportsWebMediaUnit);
+      // `found:false` carries no times to judge, so it teaches nothing — keep
+      // the last dialect the page's real player spoke in.
+      if (info.found) _webDialect = info.dialect;
+    }
+    return reply;
+  }
+
+  /// `web_media_get`, already read into the phone's own units — `null` when the
+  /// PC did not answer. The Web body polls this once a second and draws it; it
+  /// never touches the wire shape.
+  Future<WebMediaInfo?> webMediaRead() async {
+    final RemoteReply reply = await webMediaGet();
+    if (!reply.ok) return null;
+    return WebMediaInfo.from(reply.data, contractUnits: supportsWebMediaUnit);
+  }
+
   Future<RemoteReply> webMediaToggle() => send('web_media_toggle');
-  Future<RemoteReply> webMediaSeek({int? to, int? delta}) => send(
+
+  /// One of [to] or [delta] — an absolute seat or a nudge. Both go out in the
+  /// unit the PC's own last read used, so a seek lands where the thumb was.
+  Future<RemoteReply> webMediaSeek({Duration? to, Duration? delta}) => send(
         'web_media_seek',
         args: <String, Object?>{
-          'to': ?to,
-          'delta': ?delta,
+          if (to != null) 'to': _webDialect.timeValue(to),
+          if (delta != null) 'delta': _webDialect.timeValue(delta),
         },
       );
-  Future<RemoteReply> webMediaVolume(int percent) =>
-      send('web_media_volume', args: <String, Object?>{'percent': percent.clamp(0, 100)});
+
+  /// The page player's own volume, in **percent** — the write side of §17.11 is
+  /// `element.volume = percent/100` even on a PC that reports a fraction on the
+  /// read side, so this one is deliberately not dialect-converted.
+  Future<RemoteReply> webMediaVolume(int percent) => send(
+        'web_media_volume',
+        args: <String, Object?>{'percent': percent.clamp(0, 100).toInt()},
+      );
+
   Future<RemoteReply> webMediaMute(bool on) =>
       send('web_media_mute', args: <String, Object?>{'on': on});
   Future<RemoteReply> webMediaFullscreen() => send('web_media_fullscreen');
 
+  // ── the browser's tabs and bookmarks (`remote.md` §17.7, §17.13) ──────────
+  //
+  // The lists never ride the snapshot — a strip of 40 tabs would eat the whole
+  // 8 KB frame budget — so each is one request, answered from the PC's own tab
+  // strip. Both families sit behind `web_tabs` / `web_bookmarks`, and an older
+  // PC still gets useful doors rather than dead buttons (`WebTabsSheet`).
+
+  Future<RemoteReply> webTabsGet() => send('web_tabs_get');
+
+  Future<RemoteReply> webTabActivate(int index) =>
+      send('web_tab_activate', args: <String, Object?>{'index': index});
+
+  Future<RemoteReply> webTabClose(int index) =>
+      send('web_tab_close', args: <String, Object?>{'index': index});
+
+  /// A new tab. With [url] it opens that page; without, the PC's own new-tab
+  /// page. On a PC that has not been updated the phone falls back to
+  /// `open_url`, which already routes a link into the browser in Web mode.
+  Future<RemoteReply> webTabNew({String? url}) => send(
+        'web_tab_new',
+        args: <String, Object?>{if (url != null && url.isNotEmpty) 'url': url},
+      );
+
+  Future<RemoteReply> webBookmarksGet() => send('web_bookmarks_get');
+
   /// The D-pad (`remote_apk_ui.md` §6.0).
   ///
-  /// Note for the PC side: `web_key` is specified but **not implemented yet** —
-  /// `remote_command_handler.dart` answers `unknown_command` until it is. The
-  /// phone hides the D-pad until the PC advertises `web_key` in `hello.features`,
-  /// so a half-built PC never shows a dead button.
+  /// `web_key` is specified but **not implemented on every PC** — an older
+  /// `remote_command_handler.dart` answers `unknown_command`. The phone hides
+  /// the ▲ ▼ / OK keys until the PC advertises `web_key` in `hello.features`
+  /// and draws the ◀ ▶ pair either way (plain `browser_nav`, which every PC
+  /// has), so a half-built PC never shows a dead button.
+  ///
+  /// A PC that implements it answers with the page's focus in the ack —
+  /// `{focus:{label, tag, index, count, editable}}` — and the pad draws that
+  /// line, because steering a browser blind is worse than not steering it.
   Future<RemoteReply> webKey(String key) =>
       send('web_key', args: <String, Object?>{'key': key});
 
+  /// Re-read the page's focus without moving it (`web_focus_get`).
+  Future<RemoteReply> webFocusGet() => send('web_focus_get');
+
+  // ── what this PC promised in `hello` ──────────────────────────────────────
+
   bool supports(String feature) => server.value?.features.contains(feature) ?? false;
+
+  bool get supportsWebMediaUnit => supports(RemoteFeature.webMediaUnit);
+  bool get supportsWebKey => supports(RemoteFeature.webKey);
+  bool get supportsWebTabs => supports(RemoteFeature.webTabs);
+  bool get supportsWebBookmarks => supports(RemoteFeature.webBookmarks);
 }

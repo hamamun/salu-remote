@@ -193,7 +193,10 @@ set once and never touched again.
   control in that row (user, 2026-09-22).
 - **Seek and volume sliders are realtime (user, 2026-09-22):** they stream throttled
   updates *while* the thumb moves (≈8/s — inside §8's budget) and send the final value
-  on release, instead of one command on release only.
+  on release, instead of one command on release only. **The Web body's bars follow the
+  same rule (2026-09-23, §4.2)** — a seek bar that only fires on release feels broken
+  next to one that does not, and the page's player is the one place the phone reads
+  position slowly enough (1/s) to need the optimistic hold §8 describes.
 - **Queue is the playlist** (user, 2026-09-20): a collapsible card that shows **at most
   5 rows** and scrolls inside whenever there are **more than 5 items** — the whole
   queue is fetched, 100 rows per `queue_get` call (user, 2026-09-22) — and
@@ -239,24 +242,41 @@ players expose anyway.
 ```
 ┌──────────────────────────┐
 │ ● Living Room PC  ⌄  ⋮  │
-│               ◑ Web      │
+│               ◐ Web      │
 ├──────────────────────────┤
-│  ◀  ▶  ⟳        ⛶   3   │ ← nav shrinks to one quiet row
-│  Dune — YouTube          │ ← title (tap = URL box + reload + tabs)
+│  ◀  ▶  ⟳   ⛶     ▢ 3 tabs│ ← nav row; the count is a DOOR, not a label
+│  [＋ New tab] [☆ Saved]  │ ← the page doors (§4.2 below)
+│  Dune — YouTube          │ ← title (tap = URL box · long-press = diagnostics)
 │  ┌────────────────────┐  │
-│  │███████░░░░░░░░░░░░░│  │ ← the PAGE's position (1/s refresh)
+│  │███████░░░░░░░░░░░░░│  │ ← the PAGE's position, live while dragging
 │  └────────────────────┘  │
 │  12:34            45:12  │
 │                          │
-│         ( ▶ )            │ ← big play/pause — the one button
+│   ⏪10     ( ▶ )    10⏩   │ ← the one big button, with the two nudges
 │                          │
 │  🔊 ███████░░░░    🔇    │ ← the page player's own volume + mute
 └──────────────────────────┘
 ```
 
 **Shape 2 — no media on the page** (`found:false`): the nav body — back · forward ·
-reload · fullscreen · tab count, the live tab title/URL card, "Open a URL on the PC".
-No volume slider (there is nothing to volume) — that row simply isn't there.
+reload · fullscreen · the tab door, the page doors, the live tab title/URL card, "Open a
+URL on the PC". No volume slider (there is nothing to volume) — that row simply isn't
+there. A page that reports no length (a live stream) keeps the shape but swaps the bar for
+one line, *Live / not seekable — this page does not report a length.*, and greys the two
+nudges: the same rule the Play tab follows on `playback.seekable`.
+
+**The page doors** (added 2026-09-23, user request) — navigation, not playback, so they sit
+in *both* shapes:
+
+| Door | Opens | Needs from the PC |
+|---|---|---|
+| **▢ 3 tabs** (nav row) | the tab strip: every row's title + URL, the live one marked, a ✕ on each, tap to switch, **New tab** at the bottom | `web_tabs`; without it the sheet says so in one line and still opens a URL |
+| **＋ New tab** | the URL box — clipboard pre-filled as always | `web_tab_new` when the PC has it, `open_url` otherwise (which already routes into the browser in Web mode) |
+| **☆ Saved pages** | *Save this page* into SALU's URL library, then the browser's own bookmarks (read-only) and the saved list; tap = open on the PC, long-press = remove | the URL library is v1.1 and always there; `web_bookmarks` adds the browser's own pile |
+| **long-press the title card** | Web diagnostics: what the PC reported, in its own numbers, next to what the phone made of them | nothing — it is the phone's own glass, and it is how a units question gets settled by looking |
+
+Closing a tab asks nothing, the way a browser does not; the PC keeps its own session
+history and its own last-tab rule.
 
 Shared rules:
 
@@ -264,12 +284,20 @@ Shared rules:
   buttons are the fastest way to make an app feel broken.
 - **Web-media controls drive the page's own player** (JavaScript on the PC side — see
   `remote.md` §17.11), not mpv. The volume slider is the site's own volume; it never
-  touches the Windows volume.
+  touches the Windows volume. The bars are **live**, like the Play tab's own, and the
+  numbers on the wire are the PC's — milliseconds and integer percent per `remote.md`
+  §17.4, with the phone reading the units off the reply until the PC promises
+  `web_media_unit`. A wrong unit here is invisible in every other control and total in
+  these two, which is why the diagnostics sheet exists.
 - **When the page's player cannot be reached** (player inside a cross-origin iframe, or
   DRM), the phone shows one plain line — *"This site's player can't be controlled from
-  outside."* — and drops back to the nav shape. Hidden beats broken, every time.
-- **Tabs count** is read-only in v1; a tab list, closing tabs, and the download shelf
-  are v2 (they need more PC-side plumbing — see `remote.md` §17.7).
+  outside."* — and drops back to the nav shape. Hidden beats broken, every time. That
+  verdict belongs to **the page**, not to the session: navigating anywhere (the URL box, a
+  tab switch, the PC user clicking something) gives the next page a fresh trial.
+- **Tabs are a door, not a number.** The strip list, switching, closing and new tabs are
+  built on the phone and specified for the PC in `remote.md` §17.13; until a PC advertises
+  `web_tabs` the same door says what is missing and still opens a URL. The downloads shelf
+  stays PC-only — nothing a couch user would do with it.
 - **"Open a URL on the PC"** is the sleeper feature of this whole app: type or paste on
   your phone, the PC browser goes there. Available in both shapes (tap the title in
   Shape 1).
@@ -379,15 +407,34 @@ into the thing a TV remote is for:
         ▲
    ◀    [ OK ]    ▶
         ▼
-  ▲▼ move the focus · ◀▶ back and forward · OK clicks
-  Focused:  Subscribe · 4.2M                    BUTTON
+     [ ✕ Esc ]
+  ┌──────────────────────────────┐
+  │ Subscribe · BUTTON · 4 of 120  ⟳│ ← what OK is about to click
+  │ ▲▼ move the focus · ◀▶ back and │
+  │ forward · OK clicks             │
+  └──────────────────────────────┘
 ```
 
 | Key | Does | Verb |
 |---|---|---|
-| `▲` `▼` | walk the page's focusable elements (link · button · input) | **`web_key {key:"ArrowUp"\|"ArrowDown"}`** — **new** |
-| `◀` `▶` | history back / forward — the escape hatch when focus-walking lands somewhere useless | `browser_nav {action:"back"\|"forward"}` (already in §17.4) |
-| `OK` | activate the focused element | **`web_key {key:"Enter"}`** — **new** |
+| `▲` `▼` | walk the page's focusable elements (link · button · input) | **`web_key {key:"ArrowUp"|"ArrowDown"}`** |
+| `◀` `▶` | history back / forward — the escape hatch when focus-walking lands somewhere useless | `browser_nav {action:"back"|"forward"}` (already in §17.4) |
+| `OK` | activate the focused element | **`web_key {key:"Enter"}`** |
+| `Esc` | leave page/element fullscreen, close the topmost dialog | **`web_key {key:"Escape"}`** — added 2026-09-23: a couch remote with no Esc can leave the PC stuck in a full-screen advert |
+| `⟳` | read the focus again without moving it | **`web_focus_get`** |
+
+**The pad draws only the keys this PC answers** (2026-09-23). `web_key` is advertised in
+`hello.features` or it is not: when it is, the pad is the full cross above; when it is not,
+the pad is **◀ ▶ only** — plain `browser_nav`, which every PC has — with one line under it
+saying that focus walking needs an updated SALU. An empty Tune tab was the old answer and it
+was worse: a smaller pad with a sentence is honest, a blank card is a dead end, and a drawn
+button that does nothing is the fastest way to make an app feel broken.
+
+**The focus line is part of the pad, not a nicety.** Every `web_key` ack carries
+`{focus:{label, tag, index, count, editable}}` and the card under the pad shows it —
+*Subscribe · BUTTON · 4 of 120* — so the user knows what OK is about to do before doing it.
+When `editable` is true the line says the arrows belong to the caret and OK submits
+(`remote.md` §17.13.5).
 
 **The PC must draw a ring on whatever the phone has focused.** Without it the user
 is steering the browser blind and the feature is worse than useless. The ring is
@@ -563,7 +610,10 @@ a silent failure:
 | PC-only fact | What the APK shows |
 |---|---|
 | No media loaded | Tune tab: *"Nothing is playing"* + a Play shortcut |
-| PC is in Web mode | Play tab shows the Web body; Tune tab says *"Nothing to adjust in the browser"* |
+| PC is in Web mode | Play tab shows the Web body (nav row · page doors · the page player's own controls); Tune tab becomes the D-pad |
+| **The PC has not been updated** — `web_tabs`, `web_bookmarks`, `web_key` or `web_media_unit` missing from `hello.features` | Each door says so in one plain line and keeps working at the level every PC supports: the tab sheet still opens a URL, Saved pages still shows SALU's own list, the pad is ◀ ▶ only, the media bars read the units off the reply. **Never a dead button** |
+| The page reports no length (live stream, unloaded element) | No seek bar — one line, *"Live / not seekable — this page does not report a length."*, and the ±10 s nudges greyed with it |
+| The page reports no focus | The pad's card reads *"Nothing focused yet"* with the ring hint, instead of a stale element name |
 | OpenSubtitles **not signed in** | *"Sign in to OpenSubtitles on the PC to download subtitles."* |
 | **Download quota** reached | *"OpenSubtitles download limit reached. Try again tomorrow."* |
 | **No API key** configured | *"Add an OpenSubtitles key on the PC to search."* |
@@ -592,7 +642,8 @@ later.** One table, so nobody has to guess:
 | Queue jump | Row highlights immediately, PC catches up | One command |
 | Start over seat | Appears and disappears **with the PC's Resume toast** — never on a phone timer of its own, never optimistic: the tap sends `restart` and the seat goes when the PC's toast does | Nothing pushed for it beyond `playback.resume` in the snapshot (one int while the toast is up, `null` otherwise) |
 | Playlist card | Auto-scrolls to the current row on every track change; >5 rows scroll inside the 5-row window (user, 2026-09-22) | Titles fetched in `queue_get` pages of 100 when `queue.count` changes; an index-only move is pure local scroll. Clear = confirm + one `queue_clear` |
-| Web media controls (play/pause/seek/volume/mute/fullscreen) | Optimistic icon + slider state, like transport | Position read ~1/s (`web_media_get`); commands one at a time |
+| Web media controls (play/pause · −10 s/+10 s · seek · volume · mute · fullscreen) | Optimistic icon + slider state, like transport, plus an **optimistic hold**: a write parks its value until the PC's own reading agrees with it (or 1.5 s pass and the PC's word wins), so the 1/s poll can never drag the thumb back to where it was | Position read ~1/s (`web_media_get`), **one read in flight at a time**; the seek bar streams ≈4/s while dragging — a page player is being scrubbed, not nudged — and volume ≈8/s, both in the units the PC last spoke (`remote.md` §17.4) |
+| Tabs · saved pages · bookmarks (Web mode) | The sheet opens at once with whatever it already knows; a spinner only for the list itself, and one honest line for a PC that has not been updated | One request per sheet (`web_tabs_get` · `library_get` · `web_bookmarks_get`), re-read after every change; the lists never ride the snapshot (`remote.md` §17.13.3) |
 
 ---
 
@@ -635,7 +686,7 @@ Each step is usable on its own, and the app is never in a broken state between s
 | Subtitle **style** overrides (font, size, colour, position) | Every one of them is a "look at the screen and adjust" job. It belongs on the PC. |
 | Clearing the EQ learning memory | Destructive, invisible, and irreversible from the phone. |
 | Queue editing (remove / reorder) | The PC does it better with a mouse. Jumping is what the phone is for. |
-| Tabs list, tab close, downloads shelf in Web mode | Needs a real PC-side mirror of the browser's tab strip (see `remote.md` §17.7). v2. |
+| Downloads shelf in Web mode | A PC-side surface with nothing a couch user would do with it. **The tab list, tab close, tab switch, new tab and the bookmark mirror are no longer in this table** — the phone side is built and the PC side is specified (`remote.md` §17.13, work order `pc_part.md`). |
 | Fetching a subtitle from a **URL** | SALU deliberately never loads remote subtitle streams (`cc.md` D6) — a new rule would be needed, so it is a v2 decision, not an accident. |
 | A foreground service to control with the phone locked | v2; v1 keeps the screen awake while the app is open. |
 

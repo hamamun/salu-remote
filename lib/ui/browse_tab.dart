@@ -49,9 +49,7 @@ class _BrowseTabState extends State<BrowseTab> {
         padding: const EdgeInsets.all(16),
         children: <Widget>[
           const EmptyState(
-            message: 'Files and Streams are Player-only — the PC is in Web mode '
-                'right now, so there are no files to browse and the stream list '
-                'would pull the PC out of the browser.',
+            message: 'Files and Streams are unavailable in Web mode.',
           ),
         ],
       );

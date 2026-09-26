@@ -99,13 +99,10 @@ class _PlayTabState extends State<PlayTab> {
                                 : 'Not connected yet.',
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
-                      const SizedBox(height: 6),
-                      Text(
-                        problem ??
-                            'Make sure SALU is running with Remote switched on, and that this '
-                                'phone is on the same Wi-Fi as the PC.',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
+                      if (problem != null) ...<Widget>[
+                        const SizedBox(height: 6),
+                        Text(problem, style: Theme.of(context).textTheme.bodySmall),
+                      ],
                       const SizedBox(height: 14),
                       FilledButton.icon(
                         icon: const Icon(Icons.qr_code_2),

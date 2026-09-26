@@ -7,6 +7,7 @@ import '../core/client.dart';
 import '../core/error_copy.dart';
 import '../core/models.dart';
 import '../core/prefs.dart';
+import '../core/queue_reader.dart';
 import '../core/queue_view.dart';
 import '../core/reply.dart';
 import 'theme.dart';
@@ -19,8 +20,8 @@ import 'widgets.dart';
 /// in the header empties the whole playlist.
 ///
 /// Row titles come from `queue_get` (titles only, never paths —
-/// `remote.md` §17.4), fetched as the **whole queue** in pages of 100 so the
-/// list really scrolls from end to end; the auto-scroll position comes from
+/// `remote.md` §17.4), progressively fetched in pages of at most 100, with
+/// the current channel's page first; the auto-scroll position comes from
 /// the snapshot's `queue.index`, so the phone never computes playback order
 /// itself.
 ///
@@ -29,10 +30,11 @@ import 'widgets.dart';
 /// with its count and its clear button inside it, and the favourites
 /// bookmark sits beside the clear button (channels only).
 ///
-/// Channel grouping (`pc_part.md` §11):
+/// Channel grouping (`pc_part.md` Part F):
 /// - `queue.grouping` from snapshot: available modes + current mode.
 /// - Chips row above the list: Flat / Category / Country / Language.
-/// - `queue_groups` + `queue_group_set` behind the `unknown_command` hide.
+/// - Capability-gated, byte-bounded `queue_groups_page` with explicit members.
+///   Legacy PCs show a safe flat view; `queue_group_set` still changes the PC.
 /// - Grouped modes are the PC's accordion: by default every head stays
 ///   collapsed and only the played channel's group is expanded (autohide)
 ///   — a head tap toggles, it never plays, and the group holding the
@@ -57,15 +59,12 @@ class _QueueCardState extends State<QueueCard> {
   static const double _rowHeight = 44;
   static const int _visibleRows = 5;
 
-  /// The protocol's per-call cap for `queue_get` (`remote.md` §17.4).
-  static const int _pageSize = 100;
-
-  /// Delay between paged `queue_get` calls: ~22 pages/s keeps the phone
-  /// comfortably under the PC's per-connection budget of 30 commands/s
-  /// (which also has to carry pings and live-position traffic).
-  static const Duration _pageGap = Duration(milliseconds: 45);
-
   final SaluClient _client = SaluClient.instance;
+  late final QueueReader _reader = QueueReader(
+      (verb, args) => _client.send(verb, args: args));
+  bool _settingGrouping = false;
+  bool _followCurrent = true;
+  bool get _pagedGroups => _client.supports(RemoteFeature.queueGroupsPaged);
   final ScrollController _scroll = ScrollController();
   final TextEditingController _searchCtl = TextEditingController();
   List<QueueRow> _rows = const <QueueRow>[];
@@ -169,14 +168,36 @@ class _QueueCardState extends State<QueueCard> {
     _favs = RemotePrefs.instance.channelFavourites;
     // First paint scrolls straight to the now-playing row: with the whole
     // queue in the list, "5 visible rows" must be the *right* 5.
+    _client.link.addListener(_onLink);
     unawaited(_fetch(autoscroll: true));
   }
 
   @override
   void dispose() {
+    _client.link.removeListener(_onLink);
+    _fetchGeneration++;
+    _groupsGeneration++;
     _scroll.dispose();
     _searchCtl.dispose();
     super.dispose();
+  }
+
+  void _onLink() {
+    if (!mounted) return;
+    if (!_client.isOnline) {
+      _fetchGeneration++;
+      _groupsGeneration++;
+      setState(() {
+        _loading = false;
+        _groupsLoading = false;
+        _error = 'Not connected to your PC.';
+      });
+      return;
+    }
+    // Let the reconnect's hello snapshot reach this widget first.
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _client.isOnline) unawaited(_fetch(autoscroll: true));
+    });
   }
 
   @override
@@ -195,11 +216,14 @@ class _QueueCardState extends State<QueueCard> {
     if (indexChanged) {
       // The newer snapshot supersedes any temporary queue-jump highlight.
       _optimisticQueueIndex = null;
+      _followCurrent = true;
     }
 
-    if (queue.count != old.count || queue.kind != old.kind) {
+    if (queue.count != old.count || queue.kind != old.kind ||
+        queue.revision != old.revision) {
       // Invalidate row jumps from the previous playlist as well as its marker.
       _jumpGeneration++;
+      _groupsGeneration++;
       // The playlist itself changed (tracks added, queue cleared, a new
       // channel load): refetch. A channel load starts blank (the PC's
       // `_onLoadGeneration`) — no search, no favourites filter, accordion
@@ -221,6 +245,8 @@ class _QueueCardState extends State<QueueCard> {
       unawaited(_fetch(autoscroll: true));
     } else if (modeChanged || availChanged) {
       if (modeChanged) {
+        _groupsGeneration++;
+        _followCurrent = true;
         // Mode flipped — the old heads belong to the old mode. The fetch
         // below re-opens the group holding the playing channel.
         setState(() {
@@ -258,211 +284,127 @@ class _QueueCardState extends State<QueueCard> {
     return true;
   }
 
-  /// Fetches the whole queue, [_pageSize] rows per call (the protocol's
-  /// cap). For the everyday queue of ≤ 100 items this stays exactly the one
-  /// call it always was.
-  ///
-  /// Two rules make it channel-list-proof (a 10 000-channel m3u needs ~100
-  /// pages, i.e. ~100 commands inside a second):
-  /// 1. Pages are paced under the PC's per-phone budget of ~30 commands/s —
-  ///    the socket also carries pings and position traffic, so headroom matters.
-  /// 2. `too_fast` is never shown on screen (a silent code,
-  ///    `error_copy.dart`): the phone waits out the one-second window and
-  ///    retries the same page instead. Only if even the retries fail does
-  ///    the card fall back to the ordinary "busy" wording — never the
-  ///    limiter's raw "Too many commands." text.
+  /// Render each page as it arrives; prioritize the now-playing page.
   Future<void> _fetch({bool autoscroll = false}) async {
     final int generation = ++_fetchGeneration;
-    final int count = widget.snapshot.queue.count;
-    if (count == 0) {
-      if (mounted) {
-        setState(() {
-          _rows = const <QueueRow>[];
-          _groups = const <QueueGroup>[];
-          _loading = false;
-          _error = null;
-          _groupsLoading = false;
-        });
-      }
-      return;
-    }
-    if (mounted) setState(() => _loading = true);
-    final List<QueueRow> all = <QueueRow>[];
-    for (int from = 0; from < count; from += _pageSize) {
-      RemoteReply reply = await _client.queueGet(from: from, count: _pageSize);
-      if (!mounted || generation != _fetchGeneration) return;
-      for (int attempt = 0;
-          !reply.ok && reply.code == 'too_fast' && attempt < 2;
-          attempt++) {
-        await Future<void>.delayed(const Duration(seconds: 1));
-        if (!mounted || generation != _fetchGeneration) return;
-        reply = await _client.queueGet(from: from, count: _pageSize);
-        if (!mounted || generation != _fetchGeneration) return;
-      }
-      if (!reply.ok || reply['rows'] is! List) {
-        if (!mounted || generation != _fetchGeneration) return;
-        setState(() {
-          _loading = false;
-          _error = reply.code == 'too_fast'
-              ? RemoteErrorCopy.text('busy', null)
-              : RemoteErrorCopy.text(reply.code, reply.message);
-        });
-        return;
-      }
-      final List<QueueRow> rows = QueuePage.from(reply.data).rows;
-      // An empty page means the PC's queue is shorter than the snapshot
-      // claimed (it changed mid-fetch) — show what we have, not a hole.
-      if (rows.isEmpty) break;
-      all.addAll(rows);
-      if (from + _pageSize < count) {
-        await Future<void>.delayed(_pageGap);
-        if (!mounted || generation != _fetchGeneration) return;
-      }
-    }
-    if (!mounted || generation != _fetchGeneration) return;
+    final SaluQueueInfo queue = widget.snapshot.queue;
+    bool current() => mounted && generation == _fetchGeneration;
+    _groupsGeneration++;
+    _followCurrent = autoscroll;
     setState(() {
-      _rows = all;
-      _loading = false;
+      _groups = const <QueueGroup>[];
+      _groupsError = null;
+      _groupsLoading = false;
+      _rows = const <QueueRow>[];
+      _loading = queue.count > 0;
       _error = null;
     });
-    if (autoscroll) {
-      // Wait for the new rows to lay out, then bring the current one to
-      // the middle of the visible window.
-      SchedulerBinding.instance.addPostFrameCallback((_) => _scrollToCurrent());
-    }
-    // After rows are in, fetch groups if we are in grouped mode.
     unawaited(_fetchGroupsIfNeeded());
+    if (queue.count == 0) return;
+    try {
+      await _reader.rows(count: queue.count, currentIndex: queue.index,
+          revision: queue.revision, current: current, onPage: (rows) {
+        if (!current()) return;
+        setState(() => _rows = rows);
+        // Earlier pages shift the current row down. Keep it in view until the
+        // user deliberately scrolls or opens a different group.
+        if (_followCurrent) {
+          SchedulerBinding.instance.addPostFrameCallback((_) {
+            if (current() && _followCurrent) _scrollToCurrent();
+          });
+        }
+      });
+    } on QueueReadCancelled {
+      return;
+    } on QueueReadFailure catch (error) {
+      if (!current()) return;
+      setState(() => _error = _readError(error.reply));
+      if (error.reply.code == 'stale_queue') unawaited(_client.stateGet());
+    } finally {
+      if (current()) setState(() => _loading = false);
+    }
   }
 
+  String _readError(RemoteReply reply) => RemoteErrorCopy.text(
+      reply.code == 'too_fast' ? 'busy' : reply.code, reply.message);
+
   Future<void> _fetchGroupsIfNeeded() async {
-    if (_groupingSupported == false) return;
-    if (!widget.snapshot.queue.isChannels) return;
-    if (_currentMode == QueueGroupingMode.flat) {
-      if (_groups.isNotEmpty && mounted) {
-        setState(() {
-          _groups = const <QueueGroup>[];
-          _groupsLoading = false;
-        });
-      }
-      // Probe support even in flat mode when we haven't yet learned whether
-      // the PC understands grouping at all (old PC → unknown_command → hide).
-      if (_groupingSupported == null) {
-        await _fetchGroups(allowFlatProbe: true);
-      }
-      return;
-    }
+    if (!widget.snapshot.queue.isChannels ||
+        _currentMode == QueueGroupingMode.flat ||
+        widget.snapshot.queue.count == 0) return;
     await _fetchGroups();
   }
 
-  Future<void> _fetchGroups({bool allowFlatProbe = false}) async {
-    if (_groupingSupported == false) return;
-    if (!widget.snapshot.queue.isChannels) return;
-    if (_currentMode == QueueGroupingMode.flat && !allowFlatProbe) return;
-
-    final int gen = ++_groupsGeneration;
-    if (mounted) {
+  Future<void> _fetchGroups() async {
+    final int generation = ++_groupsGeneration;
+    final SaluQueueInfo queue = widget.snapshot.queue;
+    final QueueGroupingMode mode = _currentMode;
+    if (!queue.isChannels || queue.count == 0 || mode == QueueGroupingMode.flat) return;
+    bool current() => mounted && generation == _groupsGeneration;
+    // Old descriptors describe only start+count, not actual membership.
+    // Don't send the unbounded legacy request or invent incorrect groups.
+    if (!_pagedGroups || queue.revision == null) {
       setState(() {
-        _groupsLoading = true;
-        _groupsError = null;
-      });
-    }
-    final RemoteReply reply = await _client.queueGroups();
-    if (!mounted || gen != _groupsGeneration) return;
-
-    if (reply.ok) {
-      // Old PCs answer `unknown_command` → hide chips row entirely.
-      final QueueGroupsResult result = QueueGroupsResult.from(reply.data);
-      // Fresh heads open the group holding the playing channel (the PC's
-      // `_chooseMode` rule) — a head the phone never had to ask for.
-      final String? autoOpen = _currentMode == QueueGroupingMode.flat
-          ? null
-          : groupKeyForIndex(result.groups, widget.snapshot.queue.index);
-      setState(() {
-        _groups = result.groups;
         _groupsLoading = false;
-        _groupingSupported = true;
-        _groupsError = null;
-        _openGroupKey = autoOpen;
-      });
-      SchedulerBinding.instance.addPostFrameCallback((_) => _scrollToCurrent());
-      return;
-    }
-
-    if (reply.code == 'unknown_command') {
-      // PC doesn't know grouping yet — hide the whole grouping UI, no error.
-      setState(() {
-        _groupingSupported = false;
-        _groups = const <QueueGroup>[];
-        _groupsLoading = false;
-        _groupsError = null;
+        _groupsError = 'Grouped view unavailable on this PC version.';
       });
       return;
     }
-
-    // Other errors (busy, etc.) — keep previous groups if any, show error.
     setState(() {
-      _groupsLoading = false;
-      _groupsError = RemoteErrorCopy.text(reply.code, reply.message);
-      // Don't mark as unsupported for transient errors.
-      if (_groups.isEmpty) {
-        // If we had no groups before, treat as empty rather than crash.
-        _groups = const <QueueGroup>[];
-      }
+      _groupsLoading = true;
+      _groupsError = null;
     });
+    bool revealedPlaying = false;
+    try {
+      await _reader.groups(by: _modeWire(mode), revision: queue.revision!,
+          queueCount: queue.count, current: current, onPage: (groups) {
+        if (!current()) return;
+        final String? playing = groupKeyForIndex(groups, widget.snapshot.queue.index);
+        setState(() {
+          _groups = groups;
+          if (!revealedPlaying && playing != null && _followCurrent) {
+            _openGroupKey = playing;
+            revealedPlaying = true;
+          }
+        });
+        if (playing != null && _openGroupKey == playing && _followCurrent) {
+          SchedulerBinding.instance.addPostFrameCallback((_) {
+            if (current() && _followCurrent) _scrollToCurrent();
+          });
+        }
+      });
+    } on QueueReadCancelled {
+      return;
+    } on QueueReadFailure catch (error) {
+      if (!current()) return;
+      setState(() => _groupsError = _readError(error.reply));
+      if (error.reply.code == 'stale_queue') unawaited(_client.stateGet());
+    } finally {
+      if (current()) setState(() => _groupsLoading = false);
+    }
   }
 
   Future<void> _setGrouping(QueueGroupingMode mode) async {
-    if (mode == _currentMode) return;
-    if (mode != QueueGroupingMode.flat && !_availableModes.contains(mode)) {
-      // Dimmed chip — unavailable.
-      return;
-    }
-    final QueueGroupingMode previous = _currentMode;
-    // Optimistic local update so the chip lights instantly. The old heads
-    // belong to the old mode, so the list falls back to flat rows until
-    // the new heads arrive — never wrong-mode heads.
-    setState(() {
-      _currentMode = mode;
-      _groups = const <QueueGroup>[];
-      _openGroupKey = null;
-      _groupsError = null;
-      _groupsLoading = mode != QueueGroupingMode.flat;
-    });
-
-    final RemoteReply reply = await _client.queueGroupSet(_modeWire(mode));
-    if (!mounted) return;
-
-    if (reply.ok) {
-      _groupingSupported = true;
-      if (mode != QueueGroupingMode.flat) {
-        // The snapshot will soon carry the new mode; fetch groups now too
-        // so the list updates without waiting for the next snapshot tick.
-        unawaited(_fetchGroups());
+    if (_settingGrouping || mode == _currentMode) return;
+    if (mode != QueueGroupingMode.flat && !_availableModes.contains(mode)) return;
+    // One change at a time; the authoritative snapshot drives the selection.
+    // An unrelated snapshot can no longer roll back an optimistic choice.
+    setState(() => _settingGrouping = true);
+    try {
+      final RemoteReply reply = await _client.queueGroupSet(_modeWire(mode));
+      if (!mounted) return;
+      if (reply.ok) {
+        _groupingSupported = true;
+        await _client.stateGet();
+      } else if (reply.code == 'unknown_command') {
+        setState(() => _groupingSupported = false);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_readError(reply))),
+        );
       }
-      return;
-    }
-
-    if (reply.code == 'unknown_command') {
-      setState(() {
-        _groupingSupported = false;
-        _groups = const <QueueGroup>[];
-        _groupsLoading = false;
-        _currentMode = previous;
-      });
-      return;
-    }
-
-    // Failure — revert and show why. The previous mode's heads were
-    // cleared above, so they are fetched back.
-    setState(() {
-      _currentMode = previous;
-      _groupsLoading = false;
-    });
-    if (previous != QueueGroupingMode.flat) unawaited(_fetchGroups());
-    if (context.mounted && !RemoteErrorCopy.isSilent(reply.code)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(RemoteErrorCopy.text(reply.code, reply.message))),
-      );
+    } finally {
+      if (mounted) setState(() => _settingGrouping = false);
     }
   }
 
@@ -482,6 +424,7 @@ class _QueueCardState extends State<QueueCard> {
   /// now-hidden channels come back on the next tap, and the playing
   /// channel's group re-opens on its own at the next track change.
   void _toggleGroup(QueueGroup group) {
+    _followCurrent = false;
     setState(
       () => _openGroupKey = _openGroupKey == group.key ? null : group.key,
     );
@@ -509,17 +452,24 @@ class _QueueCardState extends State<QueueCard> {
     unawaited(RemotePrefs.instance.setChannelFavourites(next));
   }
 
+  Object? _displayKey;
+  List<QueueDisplayItem> _displayCache = const <QueueDisplayItem>[];
+
   List<QueueDisplayItem> _buildDisplayItems() {
-    if (_rows.isEmpty) return const <QueueDisplayItem>[];
+    if (_rows.isEmpty && _groups.isEmpty) return const <QueueDisplayItem>[];
 
     // The accordion applies only in a grouped mode on a channel list whose
-    // PC answered `queue_groups` — while the heads load, the list stays
-    // flat rows rather than wrong-mode heads.
+    // PC answered `queue_groups_page`. Unknown members stay hidden while
+    // descriptors are still arriving; search/favourites use loaded rows.
     final bool grouped = _currentMode != QueueGroupingMode.flat &&
         _groupingSupported != false &&
         widget.snapshot.queue.isChannels &&
         _groups.isNotEmpty;
-    return buildQueueDisplay(
+    final Object key = (_rows, _groups, grouped, _openGroupKey, _query,
+        _favOnly, _favs, _groupsLoading, widget.snapshot.queue.isChannels);
+    if (key == _displayKey) return _displayCache;
+    _displayKey = key;
+    return _displayCache = buildQueueDisplay(
       rows: _rows,
       groups: _groups,
       grouped: grouped,
@@ -527,6 +477,7 @@ class _QueueCardState extends State<QueueCard> {
       query: _query,
       favouritesOnly: _favOnly && widget.snapshot.queue.isChannels,
       favourites: _favs,
+      hideUnassigned: _groupsLoading,
     );
   }
 
@@ -612,6 +563,10 @@ class _QueueCardState extends State<QueueCard> {
         _optimisticQueueIndex = null;
         _rows = const <QueueRow>[];
         _groups = const <QueueGroup>[];
+        _loading = false;
+        _groupsLoading = false;
+        _error = null;
+        _groupsError = null;
         _openGroupKey = null;
       });
       return;
@@ -628,7 +583,7 @@ class _QueueCardState extends State<QueueCard> {
   String _emptyLine(SaluQueueInfo queue) {
     if (_query.isNotEmpty) return 'No matches for "$_query".';
     if (_favOnly && queue.isChannels) {
-      return 'No favourites yet — tap the bookmark on a channel to save it here.';
+      return 'No favourites yet';
     }
     return 'Nothing in the queue';
   }
@@ -660,6 +615,7 @@ class _QueueCardState extends State<QueueCard> {
     // needs group heads.
     final bool awaitingHeads = _currentMode != QueueGroupingMode.flat &&
         queue.isChannels &&
+        _pagedGroups &&
         _groupingSupported != false &&
         _groups.isEmpty &&
         _query.isEmpty &&
@@ -706,7 +662,7 @@ class _QueueCardState extends State<QueueCard> {
                   iconSize: 20,
                   visualDensity: VisualDensity.compact,
                   tooltip: _favOnly
-                      ? 'Showing favourites — tap to show all channels'
+                      ? 'Show all channels'
                       : 'Show favourites only',
                   color: _favOnly ? AppColors.accent : AppColors.iconIdle,
                   onPressed: () => setState(() => _favOnly = !_favOnly),
@@ -720,7 +676,7 @@ class _QueueCardState extends State<QueueCard> {
                 tooltip: 'Clear playlist',
                 color: AppColors.iconIdle,
                 onPressed:
-                    queue.hasRows && !_loading ? () => unawaited(_clear()) : null,
+                    queue.hasRows ? () => unawaited(_clear()) : null,
                 icon: const Icon(Icons.playlist_remove),
               ),
             ],
@@ -735,21 +691,13 @@ class _QueueCardState extends State<QueueCard> {
                     _groupingChips(),
                     const SizedBox(height: 8),
                   ],
-                  if (_loading)
-                    const _SkeletonRows()
-                  else if (_error != null)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      child: Text(_error!,
-                          style: Theme.of(context).textTheme.bodySmall),
-                    )
-                  else if (awaitingHeads && _groupsLoading)
+                  if ((_loading && display.isEmpty) || (_groupsLoading && awaitingHeads))
                     const _SkeletonRows()
                   else if (awaitingHeads)
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 8),
                       child: Text(
-                        _groupsError ?? 'No groups found.',
+                        'No groups loaded',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     )
@@ -764,23 +712,29 @@ class _QueueCardState extends State<QueueCard> {
                       height: listHeight,
                       child: Stack(
                         children: <Widget>[
-                          ListView.separated(
-                            controller: _scroll,
-                            keyboardDismissBehavior:
-                                ScrollViewKeyboardDismissBehavior.onDrag,
-                            itemCount: display.length,
-                            separatorBuilder: (_, _) =>
-                                const Divider(height: 1),
-                            itemBuilder: (BuildContext context, int i) {
-                              final QueueDisplayItem item = display[i];
-                              if (item.isGroup) {
-                                return _groupHeader(context, item.group!);
-                              } else {
-                                return _row(context, item.row!);
-                              }
+                          NotificationListener<ScrollStartNotification>(
+                            onNotification: (notification) {
+                              if (notification.dragDetails != null) _followCurrent = false;
+                              return false;
                             },
+                            child: ListView.separated(
+                              controller: _scroll,
+                              keyboardDismissBehavior:
+                                  ScrollViewKeyboardDismissBehavior.onDrag,
+                              itemCount: display.length,
+                              separatorBuilder: (_, _) =>
+                                  const Divider(height: 1),
+                              itemBuilder: (BuildContext context, int i) {
+                                final QueueDisplayItem item = display[i];
+                                if (item.isGroup) {
+                                  return _groupHeader(context, item.group!);
+                                } else {
+                                  return _row(context, item.row!);
+                                }
+                              },
+                            ),
                           ),
-                          if (_groupsLoading)
+                          if (_groupsLoading || _loading)
                             Positioned(
                               right: 4,
                               top: 2,
@@ -796,17 +750,21 @@ class _QueueCardState extends State<QueueCard> {
                         ],
                       ),
                     ),
-                  // The groups error line stays out while the list area
-                  // itself is already showing it (the failed-heads case
-                  // above) — one sentence, never two.
-                  if (_groupsError != null && !_loading && !awaitingHeads)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 6),
-                      child: Text(
-                        _groupsError!,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ),
+                  if (_error != null || _groupsError != null)
+                    Row(children: <Widget>[
+                      Expanded(child: Text(_error ?? _groupsError!,
+                          style: Theme.of(context).textTheme.bodySmall)),
+                      if (!_loading && !_groupsLoading &&
+                          (_error != null || _pagedGroups))
+                        TextButton(onPressed: () {
+                          if (_error != null) {
+                            unawaited(_fetch());
+                          } else {
+                            unawaited(_fetchGroups());
+                          }
+                        }, child: const Text('Retry')),
+                    ]),
+
                 ],
               ),
             ),
@@ -947,7 +905,7 @@ class _QueueCardState extends State<QueueCard> {
     final bool isAvailable = mode == QueueGroupingMode.flat ||
         _availableModes.contains(mode);
     // Unavailable ones dim — same as PC pill.
-    final bool enabled = isAvailable;
+    final bool enabled = isAvailable && !_settingGrouping;
 
     return Material(
       color: isSelected ? AppColors.surfaceHighlight : AppColors.surface,

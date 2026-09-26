@@ -236,16 +236,6 @@ class _StreamsPaneState extends State<StreamsPane> {
                   ),
                 ),
         ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-          child: Text(
-            info == null
-                ? 'This is the PC\'s own list.'
-                : 'This is the PC\'s own list — currently capped at ${info.maxEntries}.',
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ),
       ],
     );
   }

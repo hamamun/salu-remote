@@ -122,8 +122,7 @@ class _QrScanScreenState extends State<QrScanScreen> {
   static String? _describe(MobileScannerException error) {
     switch (error.errorCode) {
       case MobileScannerErrorCode.permissionDenied:
-        return 'Camera access was denied. Allow it for SALU Remote in the '
-            'phone\'s Settings → Apps, then reopen this screen.';
+        return 'Camera access denied.';
       case MobileScannerErrorCode.unsupported:
         return 'This phone has no camera the scanner can use.';
       default:
@@ -224,16 +223,6 @@ class _QrScanScreenState extends State<QrScanScreen> {
                 ],
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 18, 24, 22),
-              child: Text(
-                _cameraDenied
-                    ? 'The camera is not available. Open SALU on the PC and type the code instead — it is shown under the QR.'
-                    : 'Point the camera at the QR in the PC\'s Remote panel (right-click the picture → Remote).',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ),
           ],
         ),
       ),
@@ -303,8 +292,7 @@ class _WrongCodeLine extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
       ),
       child: Text(
-        'That is not a SALU pairing code ($shown). Scan the QR inside the '
-        'PC\'s Remote panel.',
+        'Not a SALU pairing code ($shown).',
         textAlign: TextAlign.center,
         style: const TextStyle(color: AppColors.barThumb, fontSize: 13),
       ),
@@ -334,7 +322,7 @@ class _CameraUnavailable extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               detail ??
-                  'Allow camera access in the system settings and reopen this screen.',
+                  'Camera unavailable.',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,
             ),

@@ -61,13 +61,6 @@ Widget _sheetTitle(BuildContext context, String title, {String? trailing}) {
   );
 }
 
-Widget _sheetNote(BuildContext context, String text) {
-  return Padding(
-    padding: const EdgeInsets.fromLTRB(20, 6, 20, 12),
-    child: Text(text, style: Theme.of(context).textTheme.bodySmall),
-  );
-}
-
 // ── the saved pages ─────────────────────────────────────────────────────────
 
 /// The pages worth keeping — **the PC browser's own bookmarks, and nothing
@@ -244,15 +237,7 @@ class _SavedPagesSheetState extends State<SavedPagesSheet> {
                 ),
               ),
             ),
-            if (page != null)
-              _sheetNote(
-                context,
-                _client.supportsWebBookmarkAdd && !_addRefused
-                    ? 'Adds ${widget.currentTitle ?? page} to the PC browser\'s bookmarks.'
-                    : 'Adds ${widget.currentTitle ?? page} to SALU\'s saved list.',
-              ),
             Flexible(child: _body(bookmarks)),
-            _sheetNote(context, 'Tap a page to open it in the PC browser.'),
           ],
         ),
       ),
@@ -422,11 +407,6 @@ class WebDiagnosticsSheet extends StatelessWidget {
           children: <Widget>[
             _sheetHandle(),
             _sheetTitle(context, 'Web diagnostics'),
-            _sheetNote(
-              context,
-              'What the PC reported about this page — long-press the page card '
-              'any time to come back here.',
-            ),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Column(

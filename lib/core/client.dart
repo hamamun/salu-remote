@@ -128,6 +128,12 @@ class SaluClient {
   /// Round-trip time from the last ping, for the Connect sheet's diagnostics.
   final ValueNotifier<int?> latencyMs = ValueNotifier<int?>(null);
 
+  /// Bounded, session-only diagnostics. No tokens, URLs or pairing codes.
+  final ValueNotifier<List<String>> disconnectHistory =
+      ValueNotifier<List<String>>(const <String>[]);
+  DateTime? _socketOpenedAt;
+  String? _socketErrorType;
+
   /// Commands in flight — the Play header's activity dot (`remote_apk_ui.md`
   /// §4.1). It appears only after 300 ms, so a fast call never flickers.
   final ValueNotifier<int> inFlight = ValueNotifier<int>(0);
@@ -427,21 +433,31 @@ class SaluClient {
     // **Who declares the link dead — and who does not.**
     // This socket-level keepalive is the authority: dart:io pings the peer
     // and closes the socket when the pong is late, entirely at the I/O
-    // layer — it never waits on the PC's command queue, so a busy PC can
-    // never look like a dead link. Together with the close event itself and
-    // the network listener, that is the whole death-detection set. The
+    // layer — it bypasses the PC's ordinary command handling, but a stalled
+    // event loop can still delay transport processing. Together with close events
+    // and the network listener, that is the whole death-detection set. The
     // app-level `ping` command is a speedometer for the Connect sheet, and
     // the stall nudge is a freshness request; neither one kills a socket.
     socket.pingInterval = const Duration(seconds: 10);
     _dialing = null;
     _socket = socket;
+    _socketOpenedAt = DateTime.now();
+    _socketErrorType = null;
     _sawHello = false;
     _lastSnapshotAt = null;
     _stallProbeInFlight = false;
     _events = socket.listen(
-      _onFrame,
-      onDone: _onClosed,
-      onError: (Object error, StackTrace stack) => _onClosed(),
+      (Object? frame) {
+        if (identical(_socket, socket)) _onFrame(frame);
+      },
+      onDone: () {
+        if (identical(_socket, socket)) _onClosed();
+      },
+      onError: (Object error, StackTrace stack) {
+        if (!identical(_socket, socket)) return;
+        _socketErrorType = error.runtimeType.toString();
+        _onClosed();
+      },
       cancelOnError: true,
     );
     // NOTE: the backoff counter is *not* reset here — only a successful
@@ -687,6 +703,19 @@ class SaluClient {
     final int? closeCode = _socket?.closeCode;
     final String? closeReason = _socket?.closeReason;
     final bool wasAuthenticated = _authenticated;
+    final DateTime now = DateTime.now();
+    final int? age = _socketOpenedAt == null
+        ? null : now.difference(_socketOpenedAt!).inSeconds;
+    final int? stateAge = _lastSnapshotAt == null
+        ? null : now.difference(_lastSnapshotAt!).inMilliseconds;
+    final String diagnostic = '${now.toIso8601String()} · code ${closeCode ?? 'none'}'
+        ' · ${snapshot.value?.mode.name ?? 'unknown'} · auth $wasAuthenticated'
+        ' · open ${age ?? '?'}s · state ${stateAge ?? '?'}ms'
+        ' · pending ${_pending.length} · RTT ${latencyMs.value ?? '?'}ms'
+        '${_socketErrorType == null ? '' : ' · $_socketErrorType'}';
+    disconnectHistory.value = List<String>.unmodifiable(
+        <String>[diagnostic, ...disconnectHistory.value].take(10));
+    debugPrint('[SALU remote] $diagnostic');
     _socket = null;
     _events = null;
     _authenticated = false;

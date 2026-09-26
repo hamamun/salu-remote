@@ -1,3 +1,233 @@
+# Part F — large playlists, grouping parity and Web-mode stability (2026-09-26)
+
+**Status: Remote implementation written in this branch; PC implementation pending.**
+This work order supersedes Part B §11's `start + count` membership assumption
+and Part E's claim that transport keepalive cannot be affected by a busy app.
+Do not mark this complete until both apps pass the acceptance tests below.
+No PC source has been modified in this Remote session.
+
+## F0. What the Remote now does / rollout
+
+- Shows queue pages progressively, requesting the now-playing channel's page
+  first. Remaining pages load in the background; full search/favourites become
+  complete as those pages arrive. This is progressive loading, **not yet an
+  on-demand-only playlist**. The entire title list is eventually fetched.
+- Shares one paced, serial read lane for row/group requests (100 ms gap after
+  each response), leaving command-budget headroom for playback/heartbeats.
+  Retries read-only `busy`, `too_fast`, `timeout` twice with backoff. Does not
+  replay grouping mutations automatically.
+- Reduces row/group page sizes on `too_large` (also recognizes the old PC's
+  `busy` with the exact oversized-response explanation). Preserves successfully
+  loaded pages on failure and offers Retry. Never increases the 8 KiB limit.
+- Review follow-up: reloads clear obsolete group descriptors, progressive pages
+  keep the playing row in view until manual scrolling/group selection, and
+  malformed or duplicate membership fragments are rejected.
+- Uses explicit membership indexes, preserves PC descriptor order, invalidates
+  obsolete requests, and caches display construction across playback snapshots.
+  Group changes follow authoritative snapshots; only one setting request at a
+  time. Rows refresh when the **content revision** changes, even at the same size.
+- **Compatibility:** new grouping reads require `hello.features` to include
+  `queue_groups_paged` AND `state.queue.revision`. Without these, Remote shows
+  a flat channel list and the short status “Grouped view unavailable on this
+  PC version.” The chips can still change the PC setting via `queue_group_set`.
+  It deliberately no longer asks for unbounded legacy `queue_groups` results or
+  guesses members from `start/count`. Flat queues/playback keep working.
+- Records the last ten socket-close diagnostics for this session, accessible in
+  Connect → Connection history: timestamp, code, mode, authenticated state,
+  connection age, snapshot age, pending command count, RTT, socket error type.
+  No URLs, tokens, pairing codes or file paths are added to this history.
+- Keeps the existing 10-second transport heartbeat unchanged pending evidence.
+  Guards callbacks from obsolete sockets. Web media polling remains single-flight,
+  skips inactive/offline states, and ignores responses from a prior page/link.
+- Removes scattered instructional paragraphs in the Remote UI; labels, concise
+  availability/error messages and destructive-action confirmations remain.
+
+## F1. PC playlist panel must observe shared grouping state
+
+Files: `lib/ui/panels/playlist_panel.dart`,
+`lib/core/channel_view_service.dart`.
+
+The panel currently observes queue/playback changes, but does not subscribe to
+`ChannelViewService.groupMode` and `openGroup`. A Remote change therefore may not
+paint until opening the panel triggers a rebuild.
+
+1. Subscribe to both view notifiers; unsubscribe in dispose. Invalidate view
+   descriptor/reveal caches and schedule a rebuild when either changes.
+2. Batch/coalesce the mode and open-group notifications into one frame. Don't
+   perform a whole-list regroup twice because `_queueGroupSet` sets both values.
+3. Use one service-level mode-change operation for PC and Remote. Preserve the
+   actual queue order and playing index; only the view changes. This operation
+   must not depend on the panel being mounted/open.
+4. Check PC pill, playlist list, playing-group reveal, search/favourites and
+   grouped next/previous behaviour with the panel both open and closed.
+
+## F2. Exact, byte-bounded grouping protocol — REQUIRED wire contract
+
+Keep protocol version 1. Add the capability **only after all of F2 works**:
+
+```
+hello.features: [..., "queue_groups_paged"]
+state.queue: {kind, count, index, grouping, revision: "opaque-content-token"}
+```
+
+`revision` is a non-empty string identifying the queue's content/order/metadata.
+It changes for load, clear, replace, append, remove, reorder, metadata edits,
+and a restarted PC session (avoid revision reuse after restart). It does **not**
+change on position ticks, play/pause, current index, or grouping-mode choice.
+Do not reuse the top-level snapshot `rev` here.
+
+### Rows (extension of existing command)
+
+```
+queue_get {from: 200, count: 100, revision: "token"}
+→ {type:"queue_result", from:200, total:10000, revision:"token",
+   rows:[{index:200,title:"..."}, ...]}
+```
+
+- Absolute queue indexes, ascending and consecutive; count means **maximum**.
+- Byte-budget the complete encoded response including envelope/UTF-8 escaping.
+  Return fewer rows if needed, not `busy`; Remote advances by actual row count.
+- If one title is too large, safely shorten its display title; do not alter its
+  playback identity/index. No URLs or private paths in Remote data.
+- Provided revision not current → `stale_queue`, no mixed-version result.
+- For old phones without a revision arg, retain the old request behaviour;
+  additional response fields are harmless. Supplied valid revision is echoed.
+
+### Group membership pages (new read-only command)
+
+```
+queue_groups_page {by:"country", revision:"token", from:0, count:20}
+→ {type:"queue_groups_result", revision:"token", by:"country",
+   groups:[{key:"stable-key",name:"Bangladesh",count:240,start:3,
+            indexes:[3,8,20,...]}], next:1}
+```
+
+Rules (must match `lib/core/queue_reader.dart`):
+
+1. Precompute groups in PC descriptor-head order. Category: first appearance;
+   country/language: alphabetical, Unknown last. **Never reorder the queue.**
+2. Flatten the descriptors into a deterministic sequence of **fragments**.
+   Split each group's actual index list into bounded non-empty fragments
+   (suggest at most 100 indexes each; smaller if the encoded fragment needs it).
+   Every fragment repeats that group's stable key, display name, total member
+   count and first absolute member index (`start`). `indexes` is that fragment's
+   exact membership, not a consecutive range. Fragments for a group are adjacent.
+3. `from` is an offset into this fragment sequence, NOT a queue index or byte
+   offset. `count` caps fragments (Remote starts at 20), NOT channel membership.
+4. `next` must be explicitly present: `from + groups.length` if more fragments
+   remain, otherwise null. Never a nonterminal empty page; never skip fragments.
+5. Byte-pack whole fragments into <= 8192 bytes including the response envelope.
+   Ensure even one fragment fits by constructing smaller fragments and bounded
+   display labels/compact stable keys up front. Fragment boundaries must be
+   deterministic for the same revision and mode, independent of requested count.
+6. Multiple fragments with the same key must have identical name/count/start.
+   Every queue channel belongs to exactly one group, including Unknown. No
+   duplicate membership within or across fragments/groups; indexes are integers
+   in [0, queue.count).
+   The Remote merges fragments by key and validates final coverage/counts.
+7. Evaluate the requested `by` independently of the current view setting.
+   Valid modes here are category/country/language; invalid mode →
+   `invalid_arguments`. Stale content revision → `stale_queue`.
+8. A changed playlist while preparing a page must fail `stale_queue`, never send
+   a page combining revisions. Response envelope must carry the command id and
+   `ok:true` as with existing typed results, so the Remote correlates the reply.
+9. Retain legacy `queue_groups` for old phones, but don't claim its range-based
+   membership is correct for scattered channels. New Remote never calls it.
+
+`start` remains descriptive/backward metadata only; it must not determine
+membership. Example: A has [0,2], B has [1,3]; A is **not** [0,1].
+
+### Error semantics
+
+- `busy`: temporarily unavailable, safe read retry.
+- `too_fast`: rate budget reached, safe read backoff.
+- `too_large`: cannot fit even the smallest response; never masquerade as busy
+  or close a healthy socket. Normal pages should avoid this by byte-packing.
+- `stale_queue`: supplied content token no longer current; Remote requests a
+  state refresh and a changed revision triggers a new load.
+- Keep generic request-size copy applicable to non-queue commands too.
+
+Mirror any new protocol constants into both repos. Remote currently gates by
+`RemoteFeature.queueGroupsPaged` and the new verb string and accepts these error codes without requiring a
+protocol-version bump. Update `remote.md` in the PC repo to this exact contract.
+
+## F3. Avoid repeated heavy work on the PC
+
+Files: `remote_service.dart`, `remote_command_handler.dart`,
+`channel_grouping.dart` and the panel/service view caches.
+
+- Cache grouping availability and group membership by content revision and
+  mode, shared between panel and Remote handler. Do not scan thousands of
+  channels on every 120/250 ms playback snapshot or each requested page.
+- Cache stable descriptors, not playback position. Invalidate only on relevant
+  content/view changes; avoid sorting/filtering in frequent widget builds.
+- Profile actual large M3Us. If parsing/group calculation blocks the UI isolate,
+  move the pure data computation to a worker isolate; apply results only if the
+  revision still matches. UI/WebView calls must stay on their supported thread.
+- A Future timeout is not cancellation and cannot preempt synchronous blocking
+  work. Timeouts alone are not a CPU isolation strategy.
+- Treat the new group read as a quiet read: it must not restart browser polling
+  or rebuild unrelated state. Heartbeats/playback controls bypass queue-read work.
+
+## F4. Web-mode polling and disconnect diagnosis
+
+Files: `remote_service.dart` (`_startWebMediaPolling`), browser service and
+`remote_web_media_bridge.dart`.
+
+1. The current 500 ms async periodic callback can overlap itself. Replace it
+   with one outstanding browser script operation, completion-based scheduling,
+   and bounded browser-operation handling. Restarting a Timer must not create a
+   second outstanding operation. Skip polling with no authenticated phone, no
+   live tab, or outside Web mode.
+2. Associate results with browser/tab identity + a generation. Ignore results
+   after navigation, close, mode switch or shutdown. Include exceptions/finally
+   cleanup so one failed script cannot silently disable polling forever.
+3. A Dart timeout does NOT cancel an underlying WebView script. Do not clear an
+   in-flight guard on timeout and immediately submit more scripts to the same
+   stalled controller. Reuse a single guarded media-read service for PC polling
+   and Remote `web_media_get` where possible; use supported controller recovery
+   or wait for the original operation to settle.
+4. Keep application ping replies outside expensive command handling. Transport
+   pings still depend on runnable event loops; investigate a separate network
+   isolate only if profiling proves shared-isolate starvation. Do not assume
+   moving a switch-case makes the socket immune to stalls.
+5. Log socket-close code/reason, timestamp, last valid frame/snapshot/heartbeat,
+   event-loop lag, pending browser operations and command durations on the PC.
+   Avoid URLs/tokens/codes/private paths. Pair these with Remote connection
+   history. Code 1001 alone does not prove Wi-Fi failure or heartbeat expiry.
+6. After evidence, consider a measured heartbeat tolerance adjustment on both
+   ends. Do not disable keepalive or simply raise every timeout. Preserve real
+   Wi-Fi-loss detection, pairing semantics and reconnect backoff.
+
+## F5. Acceptance / regression checklist
+
+- Open PC panel; change grouping on Remote: list and pill update without reopen.
+  Repeat with panel closed then reopened, and PC → Remote in all modes.
+- Alternating countries/languages/categories: exact members and PC descriptor
+  order agree; selected channel/group and next/previous remain correct.
+- 10,000 and 50,000 channels, thousands of group heads, very long Unicode names,
+  one enormous group: every encoded frame <= 8192 bytes; no oversized busy or
+  connection closure; first row page paints before the final page arrives.
+- Explicit fragments split a group over pages; cursor is monotonic and bounded;
+  no omitted/duplicated channels. Shared read budget leaves controls responsive.
+- Change mode rapidly while loading; replace playlist with another of the same
+  length; clear mid-read; reconnect; navigate away. No old rows/groups overwrite
+  newer state. Retry is bounded and previously displayed valid data survives a
+  transient read failure. On old PCs, safe flat fallback—not guessed groups.
+- Delay/reject browser script execution; navigate/close tabs during requests.
+  At most one underlying media probe at a time, stale results ignored, no
+  unhandled async exception. Web mode must remain controllable under load.
+- Run Web playback + large M3U + Remote gestures for at least 30 minutes;
+  Wi-Fi off/on, phone background/foreground, PC sleep/wake. Inspect both logs,
+  distinguishing true disconnects from command failures before claiming fixed.
+- Run Flutter analyze and all tests in both repos. Added Remote regression tests
+  are `test/queue_reader_test.dart` plus updated `test/queue_view_test.dart`.
+  This sandbox could clone Flutter but SDK downloads failed (TLS/network), so
+  Flutter compilation/tests could not be executed here; do not treat written
+  tests or a syntax-only check as a passing Flutter build.
+
+---
+
 # PC part — work orders for the Salu repo
 
 > **Where this applies:** the PC app repository `hamamun/Salu` (Flutter Windows 10/11

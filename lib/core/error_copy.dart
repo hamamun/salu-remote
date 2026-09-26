@@ -59,6 +59,10 @@ abstract final class RemoteErrorCopy {
         return 'The PC\'s browser has no bookmarked pages.';
       case 'no_web_mouse':
         return "The PC couldn't move its pointer.";
+      case 'stale_queue':
+        return 'The playlist changed.';
+      case 'invalid_response':
+        return 'Invalid playlist response.';
       case 'busy':
         return 'The PC is busy — try again in a moment.';
       case 'library_full':
@@ -66,7 +70,7 @@ abstract final class RemoteErrorCopy {
       case 'invalid_arguments':
         return "The PC didn't understand that request.";
       case 'too_large':
-        return 'That request is too big to send in one message.';
+        return 'The request or response is too large.';
       case 'offline':
         return 'Not connected to your PC.';
       case 'timeout':

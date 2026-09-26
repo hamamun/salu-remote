@@ -51,7 +51,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Saved — the PC shows the new name from the next connection.'),
+          content: Text('Name saved.'),
         ),
       );
     }
@@ -99,11 +99,6 @@ class _SettingsSheetState extends State<SettingsSheet> {
             ),
             const SizedBox(height: 22),
             Text('Play screen', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 2),
-            Text(
-              'Every optional element, on or off. Everything ships on — hide what you never touch.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
             const SizedBox(height: 8),
             // The spec's two-column checklist, in the spec's own order.
             for (int i = 0; i < sections.length; i += 2)

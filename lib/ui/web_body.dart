@@ -203,13 +203,17 @@ class _WebBodyState extends State<WebBody> {
   Future<void> _pollOnce() async {
     if (_polling || !mounted || !_client.isOnline ||
         widget.activeTab.value != WebBody.tabIndex ||
-        !widget.snapshot.web.hasTabs) return;
+        !widget.snapshot.web.hasTabs) {
+      return;
+    }
     final int generation = _pollGeneration;
     _polling = true;
     try {
       final WebMediaInfo? info = await _client.webMediaRead();
       if (!mounted || generation != _pollGeneration || info == null ||
-          !_client.isOnline || widget.activeTab.value != WebBody.tabIndex) return;
+          !_client.isOnline || widget.activeTab.value != WebBody.tabIndex) {
+        return;
+      }
       if (!info.found) {
         // The PC confirmed there is no media right now: clear holds and
         // reset media controls so nothing stale stays on screen.

@@ -57,8 +57,10 @@ void main() {
     final QueueReader reader = QueueReader((verb, args) async {
       final int n = args['count']! as int;
       sizes.add(n);
-      if (n > 1) return RemoteReply.failure('busy',
-          'The response is too large; request a smaller page.');
+      if (n > 1) {
+        return RemoteReply.failure('busy',
+            'The response is too large; request a smaller page.');
+      }
       return page(args['from']! as int, n, 4);
     }, delay: noDelay);
     await reader.rows(count: 4, currentIndex: 0, revision: null,

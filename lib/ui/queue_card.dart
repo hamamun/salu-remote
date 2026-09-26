@@ -339,7 +339,9 @@ class _QueueCardState extends State<QueueCard> {
     final int generation = ++_groupsGeneration;
     final SaluQueueInfo queue = widget.snapshot.queue;
     final QueueGroupingMode mode = _currentMode;
-    if (!queue.isChannels || queue.count == 0 || mode == QueueGroupingMode.flat) return;
+    if (!queue.isChannels || queue.count == 0 || mode == QueueGroupingMode.flat) {
+      return;
+    }
     bool current() => mounted && generation == _groupsGeneration;
     // Old descriptors describe only start+count, not actual membership.
     // Don't send the unbounded legacy request or invent incorrect groups.

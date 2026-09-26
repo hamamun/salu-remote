@@ -314,13 +314,6 @@ class _EqualizerPaneState extends State<EqualizerPane> {
                   ),
                 ],
               ),
-              const Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Learned from what you keep',
-                  style: TextStyle(fontSize: 11.5, color: AppColors.statusUnknown),
-                ),
-              ),
             ],
           ),
         ),
@@ -365,15 +358,6 @@ class _EqualizerPaneState extends State<EqualizerPane> {
                           onChanged: (bool v) => unawaited(_autoEq(v)),
                         ),
                       ],
-                    ),
-                    const Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        'Learned from what you keep',
-                        style: TextStyle(
-                            fontSize: 11.5,
-                            color: AppColors.statusUnknown),
-                      ),
                     ),
                   ],
                 ),

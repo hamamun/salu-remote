@@ -237,6 +237,7 @@ class SaluQueueInfo {
     this.count = 0,
     this.index = -1,
     this.grouping = const SaluQueueGrouping(),
+    this.revision,
   });
 
   factory SaluQueueInfo.from(Object? raw) {
@@ -246,6 +247,7 @@ class SaluQueueInfo {
       count: _i(map['count']),
       index: _i(map['index']),
       grouping: SaluQueueGrouping.from(map['grouping']),
+      revision: map['revision'] is String ? map['revision'] as String : null,
     );
   }
 
@@ -253,6 +255,9 @@ class SaluQueueInfo {
   final int count;
   final int index;
   final SaluQueueGrouping grouping;
+
+  /// Stable content revision, not the frequently changing playback revision.
+  final String? revision;
 
   bool get hasRows => count > 0;
   bool get isChannels => kind == QueueKind.channels;
@@ -264,6 +269,7 @@ class QueueGroup {
     required this.name,
     required this.count,
     required this.start,
+    this.indexes,
   });
 
   factory QueueGroup.from(Map<String, Object?> raw) => QueueGroup(
@@ -271,12 +277,18 @@ class QueueGroup {
         name: _s(raw['name'], 'Unknown'),
         count: _i(raw['count']),
         start: _i(raw['start']),
+        indexes: raw['indexes'] is List
+            ? Set<int>.unmodifiable((raw['indexes'] as List).whereType<int>().where((i) => i >= 0))
+            : null,
       );
 
   final String key;
   final String name;
   final int count;
   final int start;
+
+  /// Explicit queue membership. Null means an unsafe legacy descriptor.
+  final Set<int>? indexes;
 }
 
 class QueueGroupsResult {
@@ -1476,6 +1488,9 @@ class ServerInfo {
 ///
 /// The PC side of each promise is a work package in `pc_part.md`.
 abstract final class RemoteFeature {
+  /// Revisioned, byte-bounded explicit group membership (`pc_part.md` Part F).
+  static const String queueGroupsPaged = 'queue_groups_paged';
+
   /// `web_media_get` speaks the contract — milliseconds and integer percent —
   /// and says so with a `unit` field. Without it the phone reads the units off
   /// the reply itself ([WebMediaInfo.from]).

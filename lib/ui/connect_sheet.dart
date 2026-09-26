@@ -162,13 +162,6 @@ class _ConnectSheetState extends State<ConnectSheet> {
                 Text('Connect to your PC', style: Theme.of(context).textTheme.titleMedium),
               ],
             ),
-            const SizedBox(height: 6),
-            Text(
-              'On the PC: right-click the picture → Remote. The panel shows the '
-              'address, a QR and a code. Scan the QR or type them here once — '
-              'after that this app remembers your PC forever.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
             const SizedBox(height: 14),
             OutlinedButton.icon(
               onPressed: state == LinkState.connecting ? null : _scanQr,
@@ -192,9 +185,7 @@ class _ConnectSheetState extends State<ConnectSheet> {
               enableSuggestions: false,
               textCapitalization: TextCapitalization.characters,
               decoration: InputDecoration(
-                labelText: RemotePrefs.instance.token == null
-                    ? 'Pairing code (only the first time)'
-                    : 'Pairing code (only if the PC forgot this phone)',
+                labelText: 'Pairing code',
                 hintText: '7K4M-QP2X',
               ),
             ),
@@ -222,6 +213,22 @@ class _ConnectSheetState extends State<ConnectSheet> {
                   ),
                 );
               },
+            ),
+            ValueListenableBuilder<List<String>>(
+              valueListenable: _client.disconnectHistory,
+              builder: (context, history, _) => history.isEmpty
+                  ? const SizedBox.shrink()
+                  : ExpansionTile(
+                      title: const Text('Connection history'),
+                      children: <Widget>[
+                        for (final String entry in history)
+                          Padding(
+                            padding: const EdgeInsets.all(8),
+                            child: SelectableText(entry,
+                                style: Theme.of(context).textTheme.bodySmall),
+                          ),
+                      ],
+                    ),
             ),
             if (state == LinkState.online) ...<Widget>[
               const SizedBox(height: 18),

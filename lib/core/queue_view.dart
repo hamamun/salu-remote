@@ -5,7 +5,7 @@ import 'models.dart';
 ///
 /// The rules are the PC panel's rules (Salu `lib/core/channel_grouping.dart`
 /// + `lib/ui/panels/playlist_panel.dart`), adapted to what the phone holds:
-/// row titles and the PC's pre-computed `queue_groups` — never URLs or m3u
+/// row titles and the PC's paged explicit group membership — never URLs or m3u
 /// metadata (`remote.md` privacy rule).
 ///
 ///   * **Flat** (or an old PC, or a file queue): one row per queue entry.
@@ -43,7 +43,7 @@ class QueueDisplayItem {
 /// Builds the paint list for [rows] (the whole queue, any order).
 ///
 /// [grouped] is true only when the accordion applies: a grouped mode on a
-/// channel list whose PC answered `queue_groups`. [openGroupKey] is the
+/// channel list whose PC answered `queue_groups_page`. [openGroupKey] is the
 /// accordion's one open head (its stable PC key), or null while every group
 /// is collapsed — a stale key simply opens nothing.
 List<QueueDisplayItem> buildQueueDisplay({
@@ -54,6 +54,7 @@ List<QueueDisplayItem> buildQueueDisplay({
   required String query,
   required bool favouritesOnly,
   required Set<String> favourites,
+  bool hideUnassigned = false,
 }) {
   final String needle = query.trim().toLowerCase();
   final bool searching = needle.isNotEmpty;
@@ -68,9 +69,8 @@ List<QueueDisplayItem> buildQueueDisplay({
 
   final List<QueueRow> sorted = List<QueueRow>.from(rows)
     ..sort((QueueRow a, QueueRow b) => a.index.compareTo(b.index));
-  // No rows, no list — heads without rows are a stale-groups moment, and
-  // showing bare heads for an empty queue would read as a broken load.
-  if (sorted.isEmpty) return const <QueueDisplayItem>[];
+  // Headers may arrive before row pages; paint them progressively too.
+  if (sorted.isEmpty && !grouped) return const <QueueDisplayItem>[];
 
   // Flat, searching, or favourites-only — searches and favourites both
   // flatten grouped modes so a collapsed group cannot hide a matching row.
@@ -81,29 +81,25 @@ List<QueueDisplayItem> buildQueueDisplay({
     ];
   }
 
-  final List<QueueGroup> heads = List<QueueGroup>.from(groups)
-    ..sort((QueueGroup a, QueueGroup b) => a.start.compareTo(b.start));
-
-  // Ownership in one pass: both lists are sorted, so each head's members
-  // are the rows in [start, start+count), clipped at the next head so a
-  // stale group can never swallow its neighbour's rows.
+  // Preserve PC descriptor order (country/language need not follow queue order).
+  // Legacy start+count cannot describe scattered members: never guess.
+  final List<QueueGroup> heads = groups;
+  final Map<int, int> owner = <int, int>{};
+  for (int h = 0; h < heads.length; h++) {
+    for (final int index in heads[h].indexes ?? const <int>{}) {
+      owner.putIfAbsent(index, () => h);
+    }
+  }
   final List<List<QueueRow>> members =
       List<List<QueueRow>>.generate(heads.length, (_) => <QueueRow>[]);
   final List<QueueRow> orphans = <QueueRow>[];
-  int head = 0;
   for (final QueueRow row in sorted) {
-    bool placed = false;
-    while (head < heads.length && !placed) {
-      if (row.index < heads[head].start) {
-        break; // Before this head, and all later ones — an orphan.
-      } else if (_owns(heads, head, row.index)) {
-        members[head].add(row);
-        placed = true;
-      } else {
-        head++; // Past this head's end — try the next one.
-      }
+    final int? h = owner[row.index];
+    if (h == null) {
+      orphans.add(row);
+    } else {
+      members[h].add(row);
     }
-    if (!placed) orphans.add(row);
   }
 
   final List<QueueDisplayItem> out = <QueueDisplayItem>[];
@@ -115,7 +111,7 @@ List<QueueDisplayItem> buildQueueDisplay({
       }
     }
   }
-  for (final QueueRow row in orphans) {
+  for (final QueueRow row in hideUnassigned ? const <QueueRow>[] : orphans) {
     if (visible(row)) out.add(QueueDisplayItem.row(row));
   }
   return out;
@@ -158,21 +154,8 @@ int findQueueCurrentDisplayIndex(
 /// covers the index (including [index] < 0, "nothing playing").
 String? groupKeyForIndex(List<QueueGroup> groups, int index) {
   if (index < 0) return null;
-  final List<QueueGroup> heads = List<QueueGroup>.from(groups)
-    ..sort((QueueGroup a, QueueGroup b) => a.start.compareTo(b.start));
-  for (int h = 0; h < heads.length; h++) {
-    if (_owns(heads, h, index)) return heads[h].key;
+  for (final QueueGroup group in groups) {
+    if (group.indexes?.contains(index) ?? false) return group.key;
   }
   return null;
-}
-
-/// Whether head [h] owns queue [index]: [start, start+count), clipped at
-/// the next head's start so overlapping groups resolve to the earlier one.
-bool _owns(List<QueueGroup> heads, int h, int index) {
-  final QueueGroup group = heads[h];
-  final int nextStart =
-      h + 1 < heads.length ? heads[h + 1].start : (1 << 30);
-  int end = group.start + group.count;
-  if (end > nextStart) end = nextStart;
-  return index >= group.start && index < end;
 }

@@ -74,6 +74,7 @@ class _WebBodyState extends State<WebBody> {
   /// reads are how a slider starts answering a quarter-second late: they queue
   /// behind each other on the PC's command isolate and can trip its 30/s guard.
   bool _polling = false;
+  int _pollGeneration = 0;
 
   /// A failed write (`no_web_media`) means the player is behind a
   /// cross-origin iframe or DRM — drop back to the nav shape and say so in
@@ -134,6 +135,9 @@ class _WebBodyState extends State<WebBody> {
     final SaluWeb web = widget.snapshot.web;
     final SaluWeb oldWeb = oldWidget.snapshot.web;
 
+    if (web.url != oldWeb.url || web.tabs != oldWeb.tabs || !web.hasTabs) {
+      _pollGeneration++;
+    }
     if (!web.hasTabs) {
       // No tabs are open on the PC: clear the media controls, holds, and any
       // unreachable flag immediately so no previous tab's status stays visible.
@@ -175,6 +179,7 @@ class _WebBodyState extends State<WebBody> {
 
   void _onLink() {
     // The link dropped: a stale "playing" dot would be a lie.
+    if (!_client.isOnline) _pollGeneration++;
     if (!_client.isOnline && _media != null) {
       setState(() => _media = null);
     }
@@ -196,11 +201,15 @@ class _WebBodyState extends State<WebBody> {
   }
 
   Future<void> _pollOnce() async {
-    if (_polling) return;
+    if (_polling || !mounted || !_client.isOnline ||
+        widget.activeTab.value != WebBody.tabIndex ||
+        !widget.snapshot.web.hasTabs) return;
+    final int generation = _pollGeneration;
     _polling = true;
     try {
       final WebMediaInfo? info = await _client.webMediaRead();
-      if (!mounted || info == null) return;
+      if (!mounted || generation != _pollGeneration || info == null ||
+          !_client.isOnline || widget.activeTab.value != WebBody.tabIndex) return;
       if (!info.found) {
         // The PC confirmed there is no media right now: clear holds and
         // reset media controls so nothing stale stays on screen.

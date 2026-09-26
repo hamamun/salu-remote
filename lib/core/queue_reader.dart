@@ -85,7 +85,7 @@ class QueueReader {
         try {
           reply = await _read('queue_get', <String, Object?>{
             'from': from, 'count': requested,
-            if (revision != null) 'revision': revision,
+            'revision': ?revision,
           }, current);
         } on QueueReadFailure catch (error) {
           if (_oversized(error.reply) && requested > 1) {
@@ -145,7 +145,9 @@ class QueueReader {
       }
       _revision(reply, revision);
       if (reply['by'] != by || reply['groups'] is! List ||
-          !reply.has('next')) _invalid();
+          !reply.has('next')) {
+        _invalid();
+      }
       // Models are deliberately tolerant for old protocol fields; paged
       // membership is not. Never silently drop malformed or repeated indexes.
       final List rawGroups = reply['groups'] as List;
@@ -153,19 +155,27 @@ class QueueReader {
       for (final Object? raw in rawGroups) {
         if (raw is! Map || raw['indexes'] is! List ||
             raw['count'] is! int || raw['start'] is! int ||
-            raw['key'] is! String || raw['name'] is! String) _invalid();
+            raw['key'] is! String || raw['name'] is! String) {
+          _invalid();
+        }
         final List indexes = raw['indexes'] as List;
         if (indexes.any((index) => index is! int || index < 0) ||
-            indexes.toSet().length != indexes.length) _invalid();
+            indexes.toSet().length != indexes.length) {
+          _invalid();
+        }
       }
       final List<QueueGroup> parts = QueueGroupsResult.from(reply.data).groups;
       for (final QueueGroup part in parts) {
         final Set<int>? indexes = part.indexes;
         if (part.key.isEmpty || indexes == null || indexes.isEmpty ||
-            part.count < indexes.length) _invalid();
+            part.count < indexes.length) {
+          _invalid();
+        }
         for (final int index in indexes) {
           if (index >= queueCount ||
-              owners.containsKey(index)) _invalid();
+              owners.containsKey(index)) {
+            _invalid();
+          }
           owners[index] = part.key;
         }
         final QueueGroup? old = loaded[part.key];
@@ -183,7 +193,9 @@ class QueueReader {
         _invalid();
       }
       if (next == null && (owners.length != queueCount ||
-          loaded.values.any((g) => g.indexes!.length != g.count))) _invalid();
+          loaded.values.any((g) => g.indexes!.length != g.count))) {
+        _invalid();
+      }
       onPage(List<QueueGroup>.unmodifiable(loaded.values));
       if (next == null) return;
       from = next as int;

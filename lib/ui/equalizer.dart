@@ -57,8 +57,11 @@ class _EqualizerPaneState extends State<EqualizerPane> {
   void initState() {
     super.initState();
     widget.activeTab.addListener(_onActive);
-    if (widget.activeTab.value == widget.myIndex) _startPolling();
-    unawaited(_load());
+    _client.link.addListener(_onLink);
+    _syncPolling();
+    if (widget.activeTab.value == widget.myIndex && _client.isOnline) {
+      unawaited(_load());
+    }
   }
 
   @override
@@ -85,6 +88,7 @@ class _EqualizerPaneState extends State<EqualizerPane> {
   @override
   void dispose() {
     widget.activeTab.removeListener(_onActive);
+    _client.link.removeListener(_onLink);
     _refreshTimer?.cancel();
     super.dispose();
   }
@@ -92,18 +96,29 @@ class _EqualizerPaneState extends State<EqualizerPane> {
   void _onActive() {
     if (widget.activeTab.value == widget.myIndex) {
       // Coming back to Tune: the curve may have changed on the PC.
-      unawaited(_load());
-      _startPolling();
+      if (_client.isOnline) unawaited(_load());
+      _syncPolling();
     } else {
       _stopPolling();
     }
   }
 
   void _syncPolling() {
-    if (widget.activeTab.value == widget.myIndex) {
+    // Only poll what can answer: while the link is down, a 1/s timer would
+    // just paint "Not connected" errors over the pane every second.
+    if (widget.activeTab.value == widget.myIndex && _client.isOnline) {
       _startPolling();
     } else {
       _stopPolling();
+    }
+  }
+
+  void _onLink() {
+    _syncPolling();
+    // Back online with this pane up: refresh at once instead of waiting for
+    // the next tick, so nothing sits on pre-gap data.
+    if (_client.isOnline && widget.activeTab.value == widget.myIndex) {
+      unawaited(_load());
     }
   }
 

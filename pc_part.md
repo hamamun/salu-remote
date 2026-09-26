@@ -7,10 +7,11 @@
 > sandbox the phone side was written in has **no Flutter SDK**, so `flutter analyze` and
 > `flutter test` have not been run on it yet. Do that first.
 
-Four work orders live in this file:
+Five work orders live in this file:
 
 | Part | Date | What | Status |
 |---|---|---|---|
+| **E** | 2026-09-24 | **Connection reliability** — keep the phone's link honest: `ping` answered on the socket path, `state_get` snappy under load, connection bookkeeping, spec-row cleanup | **Phone side rebuilt in this repo (see E0); PC implementation required** |
 | **D** | 2026-09-24 | **PC power** — authenticated `pc_sleep` / `pc_shutdown`, both advertised by `pc_power` | **Phone menu and commands built; PC implementation still required** |
 | **C** | 2026-09-24 | **The web fixes the user reported after using it** — one fullscreen seat that actually works (`web_fullscreen` + the gesture problem), Home, the trackpad (`web_mouse_move` / `web_mouse_click`), add-only bookmarks, and the blank new tab | **built in this repo (see the Part C implementation record) — acceptance on the user's PC pending** |
 | **A** | 2026-09-23 | **The web section** — page-player units (the reported bug), the right media element, `web_key` + the focus ring, the tab strip mirror (list · switch · close · new), the bookmark mirror | live; still needed (C builds on it) |
@@ -28,6 +29,153 @@ bookmark mirror) are what Part C's new verbs lean on: `web_fullscreen` clicks th
 fullscreen control, `web_mouse_click` clicks wherever the pointer is, and `web_bookmark_add`
 needs the bookmark store A5 already reads. Do A first if it is not in yet; C then needs no
 rework.
+
+---
+
+# Part E — connection reliability: keep the phone linked (2026-09-26)
+
+> **Why this exists — the user's words:** *"the remote frequently lost connection with the
+> PC and reconnecting, causing lagging of real time update at remote and synchronization
+> problem with PC Salu."* A full audit of this repo (`lib/core/client.dart`,
+> `lib/ui/root.dart`, the three poller panes, `AndroidManifest.xml`, `pubspec.yaml`)
+> found the phone carried most of the blame and has already been rebuilt for it (E0).
+> What remains for `hamamun/Salu` is small but **non-optional**: the PC must answer the
+> two things the phone now deliberately leans on — a **busy-proof keepalive** and a
+> **prompt `state_get`** — and must keep its connection bookkeeping honest.
+>
+> **No protocol change.** Same wire format, same `proto: 1`, no new verbs, no feature
+> flags, no version gate, no bump. This part is timing and isolation rules only.
+
+## E0. What the phone already changed (context — no PC work)
+
+Recorded so the PC side knows exactly what it can now rely on:
+
+1. **Death of a link is declared only by the transport** — Dart's socket-level
+   `pingInterval` (now 10 s), the close event, and Android's network-change feed.
+   The app-level `ping` command is a **speedometer for the Connect sheet and nothing
+   else**; the old rule ("no app-level `pong` for 12 s ⇒ tear the socket down") is
+   gone. A busy PC can no longer look like a dead network from the phone's side.
+2. **A transient drop keeps the last snapshot on screen** — no Connect-sheet flash,
+   no forced jump to the Play tab; `hello`'s embedded snapshot repaints on reconnect
+   (force-applied, so even a PC that restarted its `rev` counter wins over the kept
+   picture).
+3. **Faster, honest recovery** — single in-flight dial (no ghost sockets stacking
+   against the PC's max-4 budget), resume does a real 3 s `state_get` health check
+   and redials immediately on failure, network-up events redial at once with a fresh
+   backoff budget, the backoff counter only resets after a real `auth_ok`, and stale
+   teardown callbacks can no longer clobber a fresh connection (generation checks).
+4. **Stall nudge** — while the snapshot says `playing` and snapshots go quiet for
+   4 s, the phone sends one `state_get` (4 s budget) instead of freezing under a
+   green dot. This is `remote.md` §6.3's *"detect a stalled link"* made real, and it
+   **depends on E3 being true**.
+5. **Sync hole closed** — absolute commands (`seek_to`, `set_volume`, `queue_jump`,
+   `eq_set`, `sub_delay`, …) that fail while the link is down are parked for one
+   replay within 20 s of the next `auth_ok`; toggles are never replayed. A failed
+   socket write is reported as *offline* (never as "too big") and rebuilds the
+   connection immediately. The Tune-tab panes stop polling while offline and refresh
+   the moment the link returns.
+
+## E1. Answer `ping` on the socket path — `lib/core/remote/remote_service.dart`
+
+* **Rule:** the `ping` verb (`remote.md` §9) must be answered with its `pong`
+  **inline, on the WebSocket's own isolate/event loop**, the moment the frame
+  arrives. It must **never** be enqueued behind the command isolate, never wait
+  behind a queue of `fs_open` / `web_mouse_move` / `subs_download`, and never share
+  the 3-second handler guard's waiting line.
+* **Why now:** the phone's own audit proved this class of stall is real on the
+  user's machine — Part B documented the `fs_places` scan blocking *the command
+  isolate for 10–30 s per dead drive letter* with an "endless timeout → retry →
+  busy loop". If `ping` rides that pipeline, a stall that long used to masquerade
+  as a dead link at the far end. The phone no longer kills on a late `pong`, but a
+  prompt `pong` is still what keeps the Connect sheet's latency number honest.
+* **Shape (unchanged):** `{"type":"pong","proto":1,"at":<echo>,"serverAt":<now>}` —
+  echo the phone's `at` exactly; the phone computes RTT from it.
+
+## E2. Socket I/O stays on the main isolate — `remote_service.dart` / architecture check
+
+* Verify — and if needed, correct — that **all WebSocket frame reads/writes and
+  dart:io's automatic protocol-level pong run on the main isolate**, while heavy
+  work (filesystem, injections, OS calls) stays on the command isolate exactly as
+  Part B/A already demand. The phone's *transport* keepalive (`pingInterval = 10 s`)
+  depends on dart:io's pongs being able to leave while the command isolate is
+  blocked; that is only true while socket I/O is not itself parked on the busy
+  isolate.
+* Do **not** move `remote_command_handler` work onto the main isolate to "fix" a
+  busy pong — that re-creates Part B's hang at a larger scale. The correct split is:
+  socket layer (main) / commands (command isolate) / `ping` answered at the socket
+  layer per E1.
+
+## E3. `state_get` stays prompt under load — `remote_command_handler.dart`
+
+* The phone's stall nudge gives `state_get` **4 seconds** (and its resume health
+  check **3 seconds**). The existing 3-second handler guard already fits — verify
+  it **cannot be starved**: `state_get` must not sit behind a long `fs_open` scan
+  or a burst of trackpad moves in a way that pushes its answer past ~3 s.
+* Cheap correct answer beats a late perfect one: if the builder is mid-burst, the
+  120 ms event clock (`remote.md` §7.2) still flushes one snapshot; `state_get`
+  should trigger that flush and ack even when nothing changed (`ack` with no body
+  is fine — the phone only needs *an* answer, plus any pending snapshot).
+
+## E4. Connection bookkeeping — `remote_service.dart`
+
+* **Auth timeout:** keep the 5 s connect→`auth` reap (`remote.md` §7.1.6) — the
+  phone's dial-guard (E0.3) means fewer ghosts, but the reap is still the backstop.
+* **4005 (max 4):** count only sockets that are actually alive. Free a device's
+  slot the instant its socket closes/errors (`onDone`/`onError`), not at the next
+  ping tick — the phone reconnects quickly now and must not be refused by a slot
+  that is already dead.
+* **`socket.pingInterval = 20 s` on the server** (spec §11): keep it; it is the
+  PC's own reap of a vanished phone, independent of anything above.
+
+## E5. Fresh-socket snapshot and `rev` — verify only
+
+* `remote.md` §6.1/§7.2 already promise: *new socket = full snapshot immediately,
+  `hello` carries a full snapshot, `rev` monotonic per process run.* Verify both
+  still hold after any refactor. The phone now force-applies the `hello` snapshot,
+  so a PC process restart (rev reset) is also safe — no PC change needed, but do
+  not "optimize" the fresh-socket snapshot away; the reconnect paint depends on it.
+
+## E6. Spec rows to fix in `remote.md` (same sitting as the code)
+
+* **§9 `ping` row** — extend the reply column's meaning: *latency display only;
+  a late `pong` never means the link is dead (transport keepalive owns death);
+  `ping` is answered inline on the socket path (Part E1), never queued behind
+  the command isolate.*
+* **§7.2 or §11** — one line: *link death is declared by transport-level
+  keepalive and close events; command-path delays (busy, `too_fast`, long
+  scans) are not evidence of a dead link and must not be treated as such by
+  either side.*
+* Leave the frame shapes, close codes, and `proto` untouched.
+
+## E7. Tests to add on the PC side
+
+1. **`ping` while the command isolate is blocked:** start a fake handler that
+   sleeps past the 3 s guard (or directly blocks the command queue), send `ping`
+   on an authenticated socket, assert a `pong` arrives well inside 1 s with the
+   echoed `at`.
+2. **`state_get` under a mouse-move burst:** 25 `web_mouse_move`/s in flight →
+   `state_get` still acks ≤ 3 s and a snapshot flush follows.
+3. **Slot accounting:** open and abruptly kill 4 sockets in sequence; a 5th
+   connect after each kill must never see `4005` from a corpse slot; the real
+   max of 4 *live* sockets still answers `4005`.
+4. **Fresh-socket snapshot:** every accepted socket receives `hello` (with state)
+   and/or an immediate snapshot before any unrelated push — unchanged from §6.1.
+
+## E8. Acceptance checklist (verify on the user's PC, in this order)
+
+1. With a folder scan or other known slow command running, watch the phone's
+   Connect sheet: latency shows a number (even a large one) — **no "Reconnecting…"
+   cycle** while the PC is merely busy.
+2. While a video plays, throttle the PC (or block the command isolate briefly):
+   the phone's UI stays on the last picture and recovers within ~one nudge
+   (`state_get` round trip) once the PC is responsive — no blank screen, no
+   Connect sheet.
+3. Toggle the phone's Wi-Fi off and on: reconnect happens the moment Wi-Fi is
+   back (E0.3), first frame correct from `hello`, no re-pairing, and no `4005`.
+4. Sleep and wake the PC: the phone's socket dies via keepalive, reconnects on
+   the PC's return, and paints in the first frame — same as §11's promise.
+5. Leave the link idle 10 minutes: zero reconnect cycles in the phone's log
+   (`[SALU remote]` lines), latency still updating once per ping.
 
 ---
 

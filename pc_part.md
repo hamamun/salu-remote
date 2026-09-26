@@ -11,8 +11,8 @@ Five work orders live in this file:
 
 | Part | Date | What | Status |
 |---|---|---|---|
-| **E** | 2026-09-24 | **Connection reliability** — keep the phone's link honest: `ping` answered on the socket path, `state_get` snappy under load, connection bookkeeping, spec-row cleanup | **Phone side rebuilt in this repo (see E0); PC implementation required** |
-| **D** | 2026-09-24 | **PC power** — authenticated `pc_sleep` / `pc_shutdown`, both advertised by `pc_power` | **Phone menu and commands built; PC implementation still required** |
+| **E** | 2026-09-24 | **Connection reliability** — keep the phone's link honest: `ping` answered on the socket path, `state_get` snappy under load, connection bookkeeping, spec-row cleanup | **built in this repo (see Part E implementation) — acceptance on the user's PC pending** |
+| **D** | 2026-09-24 | **PC power** — authenticated `pc_sleep` / `pc_shutdown`, both advertised by `pc_power` | **built in this repo (see Part D implementation) — acceptance on the user's PC pending** |
 | **C** | 2026-09-24 | **The web fixes the user reported after using it** — one fullscreen seat that actually works (`web_fullscreen` + the gesture problem), Home, the trackpad (`web_mouse_move` / `web_mouse_click`), add-only bookmarks, and the blank new tab | **built in this repo (see the Part C implementation record) — acceptance on the user's PC pending** |
 | **A** | 2026-09-23 | **The web section** — page-player units (the reported bug), the right media element, `web_key` + the focus ring, the tab strip mirror (list · switch · close · new), the bookmark mirror | live; still needed (C builds on it) |
 | **B** | 2026-09-22 | The `fs_places` drive scan (§1–9), the group-by pill bug (§10), channel grouping (§11), phone-local channel favourites (§12, a record, no PC work) | unchanged, kept below |

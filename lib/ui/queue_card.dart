@@ -331,7 +331,9 @@ class _QueueCardState extends State<QueueCard> {
   Future<void> _fetchGroupsIfNeeded() async {
     if (!widget.snapshot.queue.isChannels ||
         _currentMode == QueueGroupingMode.flat ||
-        widget.snapshot.queue.count == 0) return;
+        widget.snapshot.queue.count == 0) {
+      return;
+    }
     await _fetchGroups();
   }
 

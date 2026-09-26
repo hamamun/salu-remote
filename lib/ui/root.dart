@@ -82,16 +82,19 @@ class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
     final LinkState current = _client.link.value;
     final LinkState previous = _lastLink;
     _lastLink = current;
-    // PC closed / connection lost — return to initial stage (user request).
-    // Snapshot is already cleared in SaluClient so PlayTab shows waiting.
-    // Jump to Play and open the Connect sheet, same as first launch.
+    // Only a *cleared* picture means "back to square one" (user disconnect,
+    // pairing needed, PC gone for good): jump to Play and open the Connect
+    // sheet. A transient drop keeps the last snapshot on screen — the header
+    // dot alone says "Reconnecting…", no sheet, no tab jump — and `hello`
+    // repaints the fresh state the moment the link is back. Wiping + sheet +
+    // tab-jump on every blip is what made a 1-second hiccup look like the
+    // app had fallen apart (connection-reliability review, 2026-09-26).
     if (previous == LinkState.online && current != LinkState.online) {
-      if (_tab != 0) _setTab(0);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        if (_client.snapshot.value == null) {
-          _openConnectSheet();
-        }
+        if (_client.snapshot.value != null) return; // transient — picture kept
+        if (_tab != 0) _setTab(0);
+        _openConnectSheet();
       });
     }
   }

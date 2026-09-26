@@ -175,7 +175,7 @@ potentially destructive command. Wire and PC requirements: `remote.md` §17.15.
 ```
 ┌──────────────────────────┐
 │ ● Living Room PC  ⌄  ⋮  │ ← header: dot · name · focus · overflow
-│              ◐ Player    │ ← MODE PILL (mirrors the PC, tap = switch)
+│  ◐ Player  ·  ◐ Web          │ ← MODE SWITCH (full width, 2026-09-26)
 ├──────────────────────────┤
 │  Big Buck Bunny          │
 │  ┌────────────────────┐  │
@@ -196,9 +196,14 @@ potentially destructive command. Wire and PC requirements: `remote.md` §17.15.
 └──────────────────────────┘
 ```
 
-- **Mode pill** sits on the header line: `◐ Player` / `◐ Web`. It is a *label and a
-  switch* — it always shows the PC's real mode (the PC drives it), and tapping it asks
-  the PC to switch. When the PC switches on its own, the pill animates to the new label.
+- **Mode switch** spans the full width above the title (user, 2026-09-26:
+  *"make player and web toggle … look like repeat and shuffle"*): the same
+  card container as the transport and repeat/shuffle rows, with the two seats
+  splitting the row — `◐ Player` on one half, `◐ Web` on the other. It is still
+  a *label and a switch* — it always shows the PC's real mode (the PC drives it),
+  both seats stay visible, and tapping the unlit seat asks the PC to switch.
+  When the PC switches on its own, the lit seat moves on its own. The old
+  right-aligned compact pill is gone.
 - **Every control is an icon at one size (user, 2026-09-22).** The transport row is
   play/pause · stop · previous · next · −10 s · +10 s · fullscreen, all the same plain
   icon button — no filled play button, no text chips (the old Stop chip is a seat in

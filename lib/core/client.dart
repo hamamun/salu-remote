@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 
 import '../protocol/remote_protocol.dart';
@@ -55,12 +56,53 @@ extension LinkStateCopy on LinkState {
   }
 }
 
+/// What happened to an outgoing frame.
+enum _WriteStatus {
+  /// Bytes handed to the socket.
+  sent,
+
+  /// Refused before the wire: over the 8 KB cap (`remote.md` §6).
+  tooLarge,
+
+  /// The socket would not take the bytes — it is dead even if it still
+  /// claims to be open.
+  failed,
+}
+
+/// One in-flight `cmd`: its future, plus what it was, so a connection cut
+/// can decide whether the command may be replayed after the reconnect.
+class _PendingCommand {
+  _PendingCommand({
+    required this.completer,
+    required this.verb,
+    this.args,
+    required this.safeRetry,
+  });
+
+  final Completer<RemoteReply> completer;
+  final String verb;
+  final Map<String, Object?>? args;
+  final bool safeRetry;
+}
+
+/// A safe command parked for one replay after the next `auth_ok`.
+class _QueuedCommand {
+  _QueuedCommand({required this.verb, this.args})
+      : at = DateTime.now();
+
+  final String verb;
+  final Map<String, Object?>? args;
+  final DateTime at;
+}
+
 /// The one connection to the PC (`remote.md` §4, §7).
 ///
 /// Responsibilities, and deliberately nothing else:
 ///   * one WebSocket, opened to `ws://host:port`, `hello` → `auth` → `auth_ok`;
 ///   * the reconnect loop (backoff, and *no* loop when the PC refused us);
-///   * the ping/pong clock that measures latency and notices a dead link;
+///   * the keepalive split — socket-level `pingInterval` (+ close events +
+///     network changes) declare the link dead; the app-level `ping` command
+///     only measures latency for the Connect sheet;
 ///   * a request/reply table so `cmd` ids never leak into the UI;
 ///   * the latest [SaluSnapshot], with `rev` monotonicity enforced.
 ///
@@ -100,8 +142,20 @@ class SaluClient {
   Timer? _reconnectTimer;
   Timer? _pingTimer;
   Timer? _handshakeTimer;
-  DateTime? _pingSentAt;
   bool _authenticated = false;
+
+  /// Generation of a dial still in flight (past the guard in [_open], before
+  /// a socket is adopted). One dial at a time: a second `_open()` — resume
+  /// racing the backoff timer — must wait its turn, or it stacks an
+  /// unauthenticated ghost socket against the PC's max-4 budget
+  /// (`remote.md` §6.4, close code 4005).
+  int? _dialing;
+  bool _netWatchStarted = false;
+
+  /// When the last full snapshot frame arrived — the stall nudge's clock.
+  /// Never used to declare the link dead (transport keepalive owns that).
+  DateTime? _lastSnapshotAt;
+  bool _stallProbeInFlight = false;
 
   /// Whether *this* socket has received `hello` yet — [server] keeps the last
   /// PC's details across reconnects for the header, so it cannot answer that.
@@ -122,7 +176,17 @@ class SaluClient {
   /// `auth` uses id 1 (`remote.md` §6.1); commands start above it so an
   /// auth error can never be mistaken for a command reply.
   int _nextId = 2;
-  final Map<int, Completer<RemoteReply>> _pending = <int, Completer<RemoteReply>>{};
+  final Map<int, _PendingCommand> _pending = <int, _PendingCommand>{};
+
+  /// Absolute commands that failed while the link was down, parked for one
+  /// replay on the next `auth_ok`. Repeating them cannot double-apply (a
+  /// seek *to* 5:32 twice is still 5:32); toggles are deliberately absent.
+  final List<_QueuedCommand> _retryQueue = <_QueuedCommand>[];
+
+  /// How long a parked command stays replayable. A normal blip recovers in
+  /// well under this; a tap from minutes ago must never fire late.
+  static const Duration _retryWindow = Duration(seconds: 20);
+  static const int _retryCap = 5;
 
   /// How long the TCP + WebSocket upgrade may take. On a LAN a live PC
   /// answers in milliseconds; a *silently dropped* SYN (Windows Firewall, AP
@@ -153,12 +217,37 @@ class SaluClient {
     'not_paired',
   };
 
+  /// Verbs whose effect is an **absolute value**, so replaying after a
+  /// dropped link lands on the same result (seek *to* 5:32, volume *at*
+  /// 40). Toggles and relative steps (`play_pause`, `next`, `seek_by`,
+  /// `mute_toggle`, …) are excluded on purpose — a blind replay would
+  /// apply the action twice, which is worse than losing it once.
+  static const Set<String> _safeRetryVerbs = <String>{
+    'seek_to',
+    'set_volume',
+    'queue_jump',
+    'mode_set',
+    'fullscreen_set',
+    'sub_select',
+    'sub_delay',
+    'sub_delay_reset',
+    'subs_auto',
+    'subs_lang',
+    'eq_set',
+    'eq_preset',
+    'eq_reset',
+    'speed_set',
+    'auto_eq',
+    'take_control',
+  };
+
   // ── lifecycle ─────────────────────────────────────────────────────────────
 
   /// Called once from `main()` after prefs are loaded. Reconnects to the
   /// remembered PC if there is one; otherwise stays idle and the Connect sheet
   /// takes over.
   Future<void> autoConnect() async {
+    _startNetWatch();
     final RemotePrefs prefs = RemotePrefs.instance;
     if (!prefs.isPaired) return;
     await connect(host: prefs.host!, port: prefs.port!);
@@ -224,6 +313,10 @@ class SaluClient {
   Future<void> disconnect({bool forget = false}) async {
     _wanted = false;
     await _teardown();
+    // After the teardown: `_teardown` fails every pending command with
+    // `offline`, and the queue refuses new entries while `_wanted` is false —
+    // so nothing from this session can survive into the next one.
+    _retryQueue.clear();
     link.value = LinkState.off;
     snapshot.value = null;
     if (forget) {
@@ -236,12 +329,29 @@ class SaluClient {
   }
 
   /// Android lifecycle resume (and the app's own "the phone just woke up"
-  /// path): ask for a fresh snapshot immediately and nudge a dead socket.
+  /// path). Never *assume* the socket survived: after a screen-off it can be
+  /// a zombie that still claims to be open. Prove the link with a short
+  /// `state_get`; if it does not answer, tear down and redial at once —
+  /// no waiting out a backoff on a connection that is already gone.
   Future<void> onResume() async {
+    _startNetWatch();
     if (_socket != null && _authenticated) {
-      // Cheap, and it makes the first frame after a wake correct instead of
-      // stale for up to 250 ms (`remote.md` §9 `state_get`).
-      await send('state_get', timeout: const Duration(seconds: 4));
+      final RemoteReply reply =
+          await send('state_get', timeout: const Duration(seconds: 3));
+      if (reply.ok) return;
+      if (reply.code == 'timeout' || reply.code == 'offline') {
+        debugPrint(
+            '[SALU remote] resume health check failed (${reply.code}) — redialing');
+        final int generation = _generation;
+        await _teardown();
+        // Only redial if nothing else (network watcher, user) already took
+        // over while this socket was being closed.
+        if (_generation != generation + 1 || !_wanted) return;
+        _attempt = 0;
+        _reconnectTimer?.cancel();
+        link.value = LinkState.connecting;
+        await _open();
+      }
       return;
     }
     if (_wanted) {
@@ -253,12 +363,14 @@ class SaluClient {
 
   Future<void> _teardown() async {
     _generation++;
+    _dialing = null;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     _handshakeTimer?.cancel();
     _handshakeTimer = null;
     _stopPing();
     _authenticated = false;
+    _stallProbeInFlight = false;
     final StreamSubscription<Object?>? events = _events;
     _events = null;
     final WebSocket? socket = _socket;
@@ -277,16 +389,19 @@ class SaluClient {
   Future<void> _open() async {
     if (!_wanted || _host == null || _port == null) return;
     if (_socket != null) return; // One socket at a time, always.
+    if (_dialing != null) return; // And one dial in flight, always.
     if (link.value != LinkState.online) link.value = LinkState.connecting;
     final String host = _host!;
     final int port = _port!;
     final int generation = ++_generation;
+    _dialing = generation;
     debugPrint('[SALU remote] connecting to ws://$host:$port/ (attempt ${_attempt + 1})');
     final Future<WebSocket> opening = WebSocket.connect('ws://$host:$port/');
     final WebSocket socket;
     try {
       socket = await opening.timeout(_connectTimeout);
     } catch (error) {
+      if (_dialing == generation) _dialing = null;
       if (error is TimeoutException) {
         // `timeout` gives up waiting but the connect itself carries on. If it
         // lands later, close it — an orphan that never sends `auth` would sit
@@ -305,21 +420,33 @@ class SaluClient {
     if (generation != _generation || !_wanted) {
       // The user disconnected, or pointed the app elsewhere, while this
       // socket was still opening. It is nobody's socket now.
+      if (_dialing == generation) _dialing = null;
       unawaited(socket.close().catchError((Object _) {}));
       return;
     }
-    // Reaps a socket whose peer vanished (PC slept) instead of believing it
-    // is alive until the next write fails (`remote.md` §11).
-    socket.pingInterval = const Duration(seconds: 20);
+    // **Who declares the link dead — and who does not.**
+    // This socket-level keepalive is the authority: dart:io pings the peer
+    // and closes the socket when the pong is late, entirely at the I/O
+    // layer — it never waits on the PC's command queue, so a busy PC can
+    // never look like a dead link. Together with the close event itself and
+    // the network listener, that is the whole death-detection set. The
+    // app-level `ping` command is a speedometer for the Connect sheet, and
+    // the stall nudge is a freshness request; neither one kills a socket.
+    socket.pingInterval = const Duration(seconds: 10);
+    _dialing = null;
     _socket = socket;
     _sawHello = false;
+    _lastSnapshotAt = null;
+    _stallProbeInFlight = false;
     _events = socket.listen(
       _onFrame,
       onDone: _onClosed,
       onError: (Object error, StackTrace stack) => _onClosed(),
       cancelOnError: true,
     );
-    _attempt = 0;
+    // NOTE: the backoff counter is *not* reset here — only a successful
+    // `auth_ok` earns that. A socket that opens and then fails the handshake
+    // must keep backing off instead of retrying every second forever.
     debugPrint('[SALU remote] socket open, sending auth');
     _sendAuth();
     _startHandshakeClock();
@@ -333,13 +460,20 @@ class SaluClient {
   /// (or forever, when it is not SALU at all).
   void _startHandshakeClock() {
     _handshakeTimer?.cancel();
+    final int generation = _generation;
     _handshakeTimer = Timer(_handshakeTimeout, () {
       _handshakeTimer = null;
+      if (generation != _generation) return; // A newer connection owns the link now.
       if (_authenticated || _socket == null) return;
       final bool sawHello = _sawHello;
       debugPrint('[SALU remote] handshake timed out (hello seen: $sawHello)');
       unawaited(_teardown().then((_) {
-        if (!_wanted) return;
+        // `_teardown` itself bumps the generation, so "mine plus one" means
+        // nobody took over while we were closing. (A plain `!= generation`
+        // would compare against the post-teardown value and *always* trip;
+        // a fresh connect during the close bumps it even further — that
+        // connection's own flow owns the link now.)
+        if (_generation != generation + 1 || !_wanted) return;
         _failLink(
           'unreachable',
           sawHello
@@ -374,22 +508,25 @@ class SaluClient {
     _write(auth);
   }
 
-  /// Returns whether the frame actually went out. A frame that is too large is
-  /// refused *before* it reaches the socket, on purpose: the PC answers an
-  /// oversized frame by closing the connection (`remote.md` §6 — 8 KB maximum),
-  /// so sending one would cost the whole link rather than one command.
-  bool _write(Map<String, Object?> message) {
+  /// Returns what actually happened to the frame. A frame that is too large
+  /// is refused *before* it reaches the socket, on purpose: the PC answers an
+  /// oversized frame by closing the connection (`remote.md` §6 — 8 KB
+  /// maximum), so sending one would cost the whole link rather than one
+  /// command. [_WriteStatus.failed] is different — the socket itself refused
+  /// the bytes, which means the link is already dead and the caller must
+  /// treat it as a connection problem, never as "too big".
+  _WriteStatus _write(Map<String, Object?> message) {
     final WebSocket? socket = _socket;
-    if (socket == null) return false;
+    if (socket == null) return _WriteStatus.failed;
     try {
       socket.add(RemoteProtocol.encode(message));
-      return true;
+      return _WriteStatus.sent;
     } on RemoteProtocolException catch (error) {
       debugPrint('[SALU remote] refused to send: ${error.message}');
-      return false;
+      return _WriteStatus.tooLarge;
     } catch (error) {
       debugPrint('[SALU remote] write failed: $error');
-      return false;
+      return _WriteStatus.failed;
     }
   }
 
@@ -439,6 +576,7 @@ class SaluClient {
           'Update SALU Remote (PC ${info.version}).';
       link.value = LinkState.needsPairing;
       snapshot.value = null;
+      _wanted = false; // Same stop rule as every other "user must fix this" path.
       unawaited(_teardown());
       return;
     }
@@ -446,7 +584,12 @@ class SaluClient {
     if (state is Map) {
       // `hello` already carries a full snapshot, so a reconnecting phone paints
       // the right screen in its first frame (`remote.md` §6.1).
-      _applySnapshot(_stringKeyed(state));
+      //
+      // **Force-apply:** `hello` is the authority for a (re)opened socket.
+      // The last snapshot may have been kept across a blip, and the PC may
+      // since have restarted and reset `rev` — a kept picture must never
+      // block the fresh one.
+      _applySnapshot(_stringKeyed(state), force: true);
     }
   }
 
@@ -468,28 +611,39 @@ class SaluClient {
     _attempt = 0;
     link.value = LinkState.online;
     debugPrint('[SALU remote] online with ${server.value?.name ?? 'PC'}');
+    // Absolute taps that failed during the gap get their one fresh replay
+    // now, against a connection that has just proven itself.
+    _flushRetryQueue();
   }
 
-  void _applySnapshot(Map<String, Object?> raw) {
+  void _applySnapshot(Map<String, Object?> raw, {bool force = false}) {
+    // A snapshot frame arriving at all means the PC is pushing — record it
+    // for the stall nudge even when the frame itself is about to be dropped.
+    _lastSnapshotAt = DateTime.now();
     final SaluSnapshot next = SaluSnapshot.from(raw);
     final SaluSnapshot? current = snapshot.value;
     // Out-of-order frames are dropped: the phone only ever moves forward.
-    if (current != null && next.rev <= current.rev) return;
+    // `force` (the `hello` snapshot) overrides this — a restarted PC starts
+    // its `rev` over, and the authority of a fresh socket outranks history.
+    if (!force && current != null && next.rev <= current.rev) return;
     snapshot.value = next;
   }
 
   void _onPong(Map<String, Object?> message) {
     final int? at = message['at'] is num ? (message['at'] as num).toInt() : null;
     if (at == null) return;
-    _pingSentAt = null;
+    // Latency display only. A late pong never kills the link — death is
+    // declared by the socket-level pingInterval and the close event.
     latencyMs.value = DateTime.now().millisecondsSinceEpoch - at;
   }
 
   void _onResult(Map<String, Object?> message) {
     final Object? rawId = message['id'];
     if (rawId is! num) return;
-    final Completer<RemoteReply>? completer = _pending.remove(rawId.toInt());
-    if (completer == null || completer.isCompleted) return;
+    final _PendingCommand? pending = _pending.remove(rawId.toInt());
+    if (pending == null) return;
+    final Completer<RemoteReply> completer = pending.completer;
+    if (completer.isCompleted) return;
     final Map<String, Object?> data = Map<String, Object?>.of(message)
       ..remove('type')
       ..remove('proto')
@@ -505,10 +659,9 @@ class SaluClient {
     final String? text = message['message'] as String?;
     final Object? rawId = message['id'];
     final int? id = rawId is num ? rawId.toInt() : null;
-    final Completer<RemoteReply>? completer =
-        id == null ? null : _pending.remove(id);
-    if (completer != null && !completer.isCompleted) {
-      completer.complete(RemoteReply.failure(code, text));
+    final _PendingCommand? pending = id == null ? null : _pending.remove(id);
+    if (pending != null && !pending.completer.isCompleted) {
+      pending.completer.complete(RemoteReply.failure(code, text));
       return;
     }
     // No one was waiting: this is an authentication failure, i.e. about the
@@ -520,6 +673,7 @@ class SaluClient {
       link.value = LinkState.needsPairing;
       snapshot.value = null;
       _wanted = false;
+      _retryQueue.clear(); // A new pairing must not inherit the old session's taps.
       if (code == RemoteErrorCode.badToken) {
         // The PC forgot this phone. Keeping the token would make every later
         // attempt fail the same way; dropping it lets the next code pair.
@@ -596,9 +750,11 @@ class SaluClient {
       _wanted = false;
       return;
     }
-    // PC closed / network lost — clear stale playback so UI returns to initial connect screen.
+    // PC closed / network lost. The last picture **stays on screen** — only
+    // the header dot tells the truth while we retry, and `hello` repaints
+    // with the fresh state the moment the link is back. Wiping here is what
+    // made every blip flash the Connect sheet over a blank Play tab.
     link.value = LinkState.unreachable;
-    snapshot.value = null;
     _scheduleReconnect();
   }
 
@@ -606,7 +762,6 @@ class SaluClient {
     problemCode.value = code;
     problemMessage.value = message;
     link.value = LinkState.unreachable;
-    snapshot.value = null;
     if (_wanted) _scheduleReconnect();
   }
 
@@ -624,26 +779,80 @@ class SaluClient {
     });
   }
 
+  /// Android's own "does a network exist" feed (`connectivity_plus`).
+  /// Two jobs, both about *speed of recovery*, not about declaring death
+  /// (the socket keepalive and the close event still own that):
+  ///
+  ///  * network **vanishes** → drop the socket at once so the reconnect
+  ///    loop and its backoff start immediately, instead of waiting out the
+  ///    keepalive clock on a link that is obviously gone;
+  ///  * network **returns** → redial now with a fresh budget. The moment
+  ///    Wi-Fi comes back is exactly when a remote must snap to, not sit in
+  ///    an 11 s backoff that started while the air was down.
+  ///
+  /// Android only delivers these broadcasts while the app is in the
+  /// foreground — that is fine: the resume path ([onResume]) re-checks the
+  /// world every time the app comes back.
+  void _startNetWatch() {
+    if (_netWatchStarted) return;
+    _netWatchStarted = true;
+    // The subscription is never cancelled on purpose: the watcher lives for
+    // the whole app (the client is a singleton) and starts exactly once.
+    Connectivity().onConnectivityChanged.listen(
+      (List<ConnectivityResult> results) {
+        final bool up = results.any((ConnectivityResult r) =>
+            r == ConnectivityResult.wifi ||
+            r == ConnectivityResult.ethernet ||
+            r == ConnectivityResult.vpn ||
+            r == ConnectivityResult.other);
+        if (!up) {
+          if (_socket != null || _dialing != null) {
+            debugPrint('[SALU remote] network gone — dropping the socket now');
+            final int generation = _generation;
+            unawaited(_teardown().then((_) {
+              // Teardown bumps the generation itself: "mine plus one" means
+              // no newer connection took over during the close (e.g. the
+              // network bounced back and a dial already started).
+              if (_generation != generation + 1 || !_wanted) return;
+              link.value = LinkState.unreachable;
+              _scheduleReconnect();
+            }));
+          }
+          return;
+        }
+        // Network is up (or just came back). If we should be connected and
+        // are not — and nothing is already dialing — go now.
+        if (_wanted && !isOnline && _socket == null && _dialing == null) {
+          debugPrint('[SALU remote] network up — reconnecting immediately');
+          _attempt = 0;
+          _reconnectTimer?.cancel();
+          unawaited(_open());
+        }
+      },
+      onError: (Object _) {},
+    );
+  }
+
+  /// The 5-second house clock. Two jobs, and **killing the link is not one
+  /// of them**:
+  ///
+  ///  * **latency** — one `ping` command, answered by the PC with a `pong`
+  ///    and shown in the Connect sheet. A late pong means the PC is busy;
+  ///    death is declared by the socket-level `pingInterval`, the close
+  ///    event, and the network listener — never by this clock. (The old
+  ///    rule — tear the socket down after 12 s without an app-level pong —
+  ///    made every PC-side stall look like a dead network, and contradicted
+  ///    the 15–30 s grace the phone gives its own slow commands.)
+  ///  * **stall nudge** — while the PC reports it is *playing*, snapshots
+  ///    arrive every ~250 ms (`remote.md` §7.2). If they stop for a few
+  ///    seconds, one `state_get` asks for a fresh picture instead of
+  ///    letting the screen freeze under a green dot (`remote.md` §6.3's
+  ///    "detect a stalled link", made real).
   void _startPing() {
     _stopPing();
     _pingTimer = Timer.periodic(const Duration(seconds: 5), (Timer timer) {
-      final DateTime? sent = _pingSentAt;
-      final DateTime now = DateTime.now();
-      if (sent != null && now.difference(sent).inSeconds >= 12) {
-        // Two missed pings: the socket is a ghost. Drop it; the reconnect loop
-        // brings it back (`remote.md` §7.2's "detect a stalled link").
-        _pingSentAt = null;
-        unawaited(_teardown().then((_) {
-          if (_wanted) {
-            link.value = LinkState.unreachable;
-            snapshot.value = null;
-            _scheduleReconnect();
-          }
-        }));
-        return;
-      }
       if (!_authenticated) return;
-      _pingSentAt ??= now;
+      final DateTime now = DateTime.now();
       _write(<String, Object?>{
         'type': 'cmd',
         'id': _nextId++,
@@ -651,20 +860,92 @@ class SaluClient {
         'verb': 'ping',
         'args': <String, Object?>{'at': now.millisecondsSinceEpoch},
       });
+      _stallNudge(now);
     });
+  }
+
+  /// Playing means a snapshot every ~250 ms. A few seconds of silence while
+  /// the position should be moving is a stall — ask for the picture. If the
+  /// PC is merely busy, the ask waits its turn and the link stays up; a
+  /// genuinely dead socket is already handled by `pingInterval`.
+  void _stallNudge(DateTime now) {
+    final SaluSnapshot? snap = snapshot.value;
+    if (snap == null || snap.playback.state != TransportState.playing) return;
+    final DateTime? last = _lastSnapshotAt;
+    if (last == null || now.difference(last) < const Duration(seconds: 4)) {
+      return;
+    }
+    if (_stallProbeInFlight) return;
+    _stallProbeInFlight = true;
+    debugPrint('[SALU remote] snapshots stalled while playing — nudging with state_get');
+    unawaited(
+      send('state_get', timeout: const Duration(seconds: 4)).whenComplete(() {
+        _stallProbeInFlight = false;
+      }),
+    );
   }
 
   void _stopPing() {
     _pingTimer?.cancel();
     _pingTimer = null;
-    _pingSentAt = null;
   }
 
   void _failPending(RemoteReply reply) {
-    for (final Completer<RemoteReply> completer in _pending.values) {
-      if (!completer.isCompleted) completer.complete(reply);
+    final bool offline = reply.code == 'offline';
+    for (final _PendingCommand pending in _pending.values) {
+      if (!pending.completer.isCompleted) {
+        pending.completer.complete(reply);
+      }
+      // The cut may have eaten a command that never reached the PC (or its
+      // reply). If it is safe to apply twice, park it for one replay on the
+      // next `auth_ok` — this is the sync hole a dropped blip used to open.
+      if (offline && pending.safeRetry) {
+        _enqueueRetry(pending.verb, pending.args);
+      }
     }
     _pending.clear();
+  }
+
+  void _enqueueRetry(String verb, Map<String, Object?>? args) {
+    // Nothing is parked once the user (or a pairing refusal) has stopped the
+    // link on purpose — teardown fails every pending command with `offline`,
+    // and those must not outlive the session they came from.
+    if (!_wanted) return;
+    if (_retryQueue.length >= _retryCap) _retryQueue.removeAt(0);
+    _retryQueue.add(_QueuedCommand(verb: verb, args: args));
+    debugPrint(
+        '[SALU remote] parked $verb for replay after reconnect (${_retryQueue.length} queued)');
+  }
+
+  /// Replay what is still fresh after a successful `auth_ok`. Anything
+  /// parked longer than [_retryWindow] is dropped on purpose: a tap from
+  /// minutes ago must never fire late against a changed screen.
+  void _flushRetryQueue() {
+    if (_retryQueue.isEmpty) return;
+    final DateTime cutoff = DateTime.now().subtract(_retryWindow);
+    final List<_QueuedCommand> fresh = _retryQueue
+        .where((_QueuedCommand c) => c.at.isAfter(cutoff))
+        .toList(growable: false);
+    _retryQueue.clear();
+    for (final _QueuedCommand cmd in fresh) {
+      debugPrint('[SALU remote] replaying ${cmd.verb} after reconnect');
+      unawaited(send(cmd.verb, args: cmd.args));
+    }
+  }
+
+  /// A write failed on a socket that still claimed to be open (or a health
+  /// check came back empty). Rebuild at once instead of waiting out the
+  /// keepalive clock. The last snapshot stays on screen — only the dot moves.
+  Future<void> _noteDeadSocket() async {
+    if (_socket == null) return;
+    debugPrint('[SALU remote] write failed on an open socket — rebuilding it now');
+    final int generation = _generation;
+    await _teardown();
+    // Teardown bumps the generation itself: "mine plus one" means no newer
+    // connection took over during the close — do not clobber its state.
+    if (_generation != generation + 1 || !_wanted) return;
+    link.value = LinkState.unreachable;
+    _scheduleReconnect();
   }
 
   void _clearProblem() {
@@ -701,22 +982,38 @@ class SaluClient {
   }) async {
     final WebSocket? socket = _socket;
     if (socket == null || socket.readyState != WebSocket.open || !_authenticated) {
+      // The frame never went anywhere. Park absolute commands so the next
+      // connection applies them once instead of silently losing the tap.
+      if (_safeRetryVerbs.contains(verb)) _enqueueRetry(verb, args);
       return RemoteReply.offline();
     }
     final int id = _nextId++;
-    final Completer<RemoteReply> completer = Completer<RemoteReply>();
-    _pending[id] = completer;
+    final _PendingCommand pending = _PendingCommand(
+      completer: Completer<RemoteReply>(),
+      verb: verb,
+      args: args,
+      safeRetry: _safeRetryVerbs.contains(verb),
+    );
+    _pending[id] = pending;
     inFlight.value = inFlight.value + 1;
     try {
-      final bool sent = _write(<String, Object?>{
+      final _WriteStatus status = _write(<String, Object?>{
         'type': 'cmd',
         'id': id,
         'proto': protocolVersion,
         'verb': verb,
         if (args != null && args.isNotEmpty) 'args': args,
       });
-      if (!sent) {
+      if (status != _WriteStatus.sent) {
         _pending.remove(id);
+        if (status == _WriteStatus.failed) {
+          // The socket claimed to be open but would not take the bytes —
+          // it is a corpse. Say "not connected" (never "too big") and
+          // rebuild the connection now instead of after the keepalive clock.
+          unawaited(_noteDeadSocket());
+          if (pending.safeRetry) _enqueueRetry(verb, args);
+          return RemoteReply.offline();
+        }
         return const RemoteReply(
           ok: false,
           type: 'error',
@@ -724,9 +1021,13 @@ class SaluClient {
           message: 'That request is too big to send in one message.',
         );
       }
-      return await completer.future.timeout(timeout);
+      return await pending.completer.future.timeout(timeout);
     } on TimeoutException {
       _pending.remove(id);
+      // Deliberately **not** queued: a timeout is ambiguous (the PC may
+      // still execute it late), and the replay window is for real offline
+      // gaps only. The caller shows the timeout; the next snapshot tells
+      // the truth either way.
       return const RemoteReply(
         ok: false,
         type: 'error',

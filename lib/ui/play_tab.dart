@@ -123,38 +123,53 @@ class _PlayTabState extends State<PlayTab> {
     );
   }
 
-  /// The mode pill — a label *and* a switch. It always shows the PC's real
+  /// The mode switch — a label *and* a switch. It always shows the PC's real
   /// mode (the PC drives it); both seats are visible so the user sees where
   /// they are going before they go (`remote_apk_ui.md` §2.1, §4.1).
+  ///
+  /// **Full width, left to right** (user, 2026-09-26: *"make player and web
+  /// toggle … look like repeat and shuffle"*). It used to be a small
+  /// right-aligned cluster above the title; now it is the same SaluCard
+  /// container the transport and repeat/shuffle rows use, and the two seats
+  /// split the whole row — half Player, half Web — so the switch reads at a
+  /// glance and both thumb targets are big. Neither seat is ever hidden, and
+  /// tapping the unlit one is still the way to switch.
   Widget _modePill(SaluSnapshot snapshot) {
     final bool web = snapshot.isWeb;
-    return Align(
-      alignment: Alignment.centerRight,
+    return SaluCard(
+      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          _seat(
-            icon: Icons.play_circle_outline,
-            label: 'Player',
-            active: !web,
-            onTap: web
-                ? () => unawaited(runRemote(context, () => _client.modeSet('player')))
-                : null,
+          Expanded(
+            child: _seat(
+              icon: Icons.play_circle_outline,
+              label: 'Player',
+              active: !web,
+              onTap: web
+                  ? () =>
+                      unawaited(runRemote(context, () => _client.modeSet('player')))
+                  : null,
+            ),
           ),
           const SizedBox(width: 8),
-          _seat(
-            icon: Icons.public,
-            label: 'Web',
-            active: web,
-            onTap: !web
-                ? () => unawaited(runRemote(context, () => _client.modeSet('web')))
-                : null,
+          Expanded(
+            child: _seat(
+              icon: Icons.public,
+              label: 'Web',
+              active: web,
+              onTap: !web
+                  ? () => unawaited(runRemote(context, () => _client.modeSet('web')))
+                  : null,
+            ),
           ),
         ],
       ),
     );
   }
 
+  /// One half of the mode switch: icon + label, centred in its seat. The lit
+  /// seat carries the accent border and highlight; the dark one is the door
+  /// you tap. Same border language as before — only the width changed.
   Widget _seat({
     required IconData icon,
     required String label,
@@ -176,7 +191,7 @@ class _PlayTabState extends State<PlayTab> {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
           child: Row(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: <Widget>[
               Icon(icon, size: 16, color: active ? AppColors.accent : AppColors.iconIdle),
               const SizedBox(width: 6),

@@ -1,3 +1,8 @@
+> **2026-09-26 extension:** `pc_part.md` Part F defines the capability-gated,
+> revisioned `queue_groups_page` protocol used by the current Remote. It supersedes
+> legacy `start + count` group membership. PC implementation is still pending;
+> Remote uses a safe flat view until that capability is advertised.
+
 # SALU Remote — PC-Side Implementation Spec (Phase 8, Part 1)
 
 **Status:** 📝 Decisions locked, not implemented — scope extended to **v1.1** on

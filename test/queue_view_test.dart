@@ -6,7 +6,8 @@ import 'package:salu_remote/core/queue_view.dart';
 QueueRow row(int index, String title) => QueueRow(index: index, title: title);
 
 QueueGroup mkGroup(String key, String name, int start, int count) =>
-    QueueGroup(key: key, name: name, start: start, count: count);
+    QueueGroup(key: key, name: name, start: start, count: count,
+        indexes: <int>{for (int i = start; i < start + count; i++) i});
 
 /// A 6-channel list in two groups: Sports (0–2), News (3–5).
 List<QueueRow> rows() => <QueueRow>[
@@ -212,14 +213,15 @@ void main() {
         favouritesOnly: false,
         favourites: const <String>{},
       );
-      // A is clipped at B's start: rows 0–2 only.
+      // Explicit membership wins; no invented clipping at the next head.
       expect(
         titles(display),
-        <String>['H:A', 'Sports One', 'Sports Two', 'Match Day', 'H:B'],
+        <String>['H:A', 'Sports One', 'Sports Two', 'Match Day',
+          'Morning News', 'Evening News', 'Sports News Hour', 'H:B'],
       );
     });
 
-    test('empty rows: empty display, even grouped', () {
+    test('headers display before channel pages arrive', () {
       expect(
         buildQueueDisplay(
           rows: const <QueueRow>[],
@@ -230,7 +232,7 @@ void main() {
           favouritesOnly: false,
           favourites: const <String>{},
         ),
-        isEmpty,
+        hasLength(2),
       );
     });
   });

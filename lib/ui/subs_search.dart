@@ -204,17 +204,7 @@ class _SubsSearchScreenState extends State<SubsSearchScreen> {
               actionLabel: 'Try again',
               onAction: () => unawaited(_search()),
             )
-          else if (!_searched)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 24),
-              child: Text(
-                'The PC searches OpenSubtitles and downloads — the subtitle '
-                'lands beside your media and loads immediately.',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            )
-          else if (_results.isEmpty)
+          else if (_searched && _results.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 24),
               child: Text(

@@ -332,15 +332,6 @@ class _FilesBrowserState extends State<FilesBrowser> {
           const EmptyState(
             message: 'File browsing is turned off on the PC.',
           ),
-          const SizedBox(height: 10),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: Text(
-              'Turn it on in SALU → Settings → General → Remote → "Let phones '
-              'browse PC files". The Files tab comes back as soon as it does.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ),
         ],
       );
     }

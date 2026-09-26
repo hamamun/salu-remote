@@ -16,6 +16,13 @@ import 'widgets.dart';
 /// segmented switch — and all three are meaningless when nothing is playing,
 /// so the tab says *"Nothing is playing"* in one place, with a Play shortcut.
 ///
+/// **An m3u channel list is the same kind of dead end** (user, 2026-09-26):
+/// while `queue.isChannels` is loaded, none of the three panes has anything
+/// to adjust — so the tab says so, in the same one-honest-line style, instead
+/// of offering an equalizer, subtitle tracks and audio tracks that cannot be
+/// used. The moment a file queue replaces the channel list, the switch and
+/// its three panes come back on their own.
+///
 /// **In Web mode the tab becomes a mouse pad** (user, 2026-09-24, replacing the
 /// D-pad of §6.0). There is no equalizer, no subtitle track and no audio track
 /// when what is playing is a web page — what there is, is a page the user
@@ -89,6 +96,23 @@ class _TuneTabState extends State<TuneTab> {
       // row's room reserved underneath it (`MousePad`) — and a scrolling parent
       // would only fight the pad's own drag for the gesture arena.
       return const MousePad();
+    }
+    if (snapshot.queue.isChannels) {
+      // m3u loaded: no equalizer, no subtitle track, no audio track to pick —
+      // the whole switch would be three greyed doors with nothing behind any
+      // of them. One honest line instead, same shape as "Nothing is playing"
+      // below; checked first so the message holds whether the channel list is
+      // idle, paused or on air (user, 2026-09-26).
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: <Widget>[
+          EmptyState(
+            message: 'A channel list is loaded — nothing to adjust here.',
+            actionLabel: 'Go to Play',
+            onAction: widget.onGoPlay,
+          ),
+        ],
+      );
     }
     if (snapshot.nothingPlaying) {
       return ListView(

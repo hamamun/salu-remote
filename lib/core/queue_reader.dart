@@ -1,16 +1,47 @@
 import 'dart:async';
 
+import 'link_health.dart';
 import 'models.dart';
 import 'reply.dart';
 
 /// Only read-only queue requests use this lane. Playback and heartbeats never
 /// wait behind it. Shared by row and group loads, including superseded loads.
+///
+/// A playlist read is **voluntary work**: nothing the thumb did is waiting
+/// on it. So this lane is the one that gives way when the PC says it cannot
+/// keep up ([blocked]) — it was asking ten times a second, which on a
+/// 50,000-channel list is minutes of continuous load on a PC that already
+/// had a 30 commands/second budget to share (`salu_remote.md` Part 7).
 class QueueReader {
-  QueueReader(this.send, {Future<void> Function(Duration)? delay})
-      : delay = delay ?? Future<void>.delayed;
+  QueueReader(
+    this.send, {
+    Future<void> Function(Duration)? delay,
+    this.blocked,
+  }) : delay = delay ?? Future<void>.delayed;
 
   final Future<RemoteReply> Function(String, Map<String, Object?>) send;
   final Future<void> Function(Duration) delay;
+
+  /// Optional "the PC needs room right now" predicate. Consulted before
+  /// every read; while it is true the lane waits rather than asks.
+  final bool Function()? blocked;
+
+  /// The floor between two reads on a healthy link.
+  static const LinkHealth _health = LinkHealth();
+
+  /// How long the lane will keep out of the PC's way before it reads anyway.
+  /// A playlist the user is looking at must still arrive, however busy the
+  /// PC is — this only stops the lane from *adding* to the problem.
+  static const int _maxYieldSteps = 40; // 40 × 250 ms = 10 s.
+
+  Future<void> _yieldWhileBusy() async {
+    final bool Function()? isBusy = blocked;
+    if (isBusy == null) return;
+    for (int step = 0; step < _maxYieldSteps && isBusy(); step++) {
+      await delay(const Duration(milliseconds: 250));
+    }
+  }
+
   Future<void> _tail = Future<void>.value();
 
   Future<RemoteReply> _read(String verb, Map<String, Object?> args,
@@ -23,10 +54,14 @@ class QueueReader {
       late RemoteReply reply;
       try {
         if (!current()) throw const QueueReadCancelled();
+        await _yieldWhileBusy();
+        if (!current()) throw const QueueReadCancelled();
         reply = await send(verb, args);
-        // At most ten queue reads/sec across both loaders. Leave ample room
-        // in the PC's 30 commands/sec budget for interactive controls.
-        await delay(const Duration(milliseconds: 100));
+        // At most five queue reads/sec across both loaders (was ten).
+        // The PC's whole budget is 30 commands/second (§7.3) and a trackpad
+        // alone spends 25 of them — a read lane that took a third of what
+        // was left is why interactive controls came back `busy`.
+        await delay(_health.readPace);
       } finally {
         done.complete();
       }

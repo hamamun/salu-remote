@@ -3277,9 +3277,10 @@ later.** One table, so nobody has to guess:
 
 ### 9. Marks to draw
 
-The APK ships **no image assets** — every icon is a `CustomPainter`, ported from the PC's
-`transport_marks.dart` / `salu_marks.dart` so both apps draw identical marks. New ones
-needed for this scope (add them on the PC side first, then port):
+The in-app UI ships **no image assets** for its controls — every control mark is a `CustomPainter`,
+ported from the PC's `transport_marks.dart` / `salu_marks.dart` so both apps draw identical marks.
+The Android launcher icon is the SALU logo from `hamamun/Salu` (`assets/images/salu_logo.png`).
+New control marks needed for this scope (add them on the PC side first, then port):
 
 `FolderMark` · `DriveMark` · `FileMediaMark` · `SubtitleMark (CC)` · `EqualizerMark` (exists) ·
 `GlobeMark (web)` · `LinkMark` · `FullscreenMark` · `ChevronMark` · `SearchMark` ·

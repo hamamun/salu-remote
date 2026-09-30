@@ -18,3 +18,6 @@ android/key.properties
 # OS/editor files
 .DS_Store
 Thumbs.db
+
+# Python (the two doc tools in the repo root)
+__pycache__/

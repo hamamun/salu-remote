@@ -31,7 +31,7 @@ plugins {
     //  * Gradle 9.3.1 runs on Java 17-25; Java 26 needs Gradle 9.4+, which Flutter does
     //    not know about yet - when that day comes, upgrade Flutter, not just Gradle.
     // The harmless "restricted method in java.lang.System has been called" warning on
-    // JDK 24+ is the price of that support; see README -> Troubleshooting.
+    // JDK 24+ is the price of that support; see salu_remote.md Part 1 -> Troubleshooting.
     id("com.android.application") version "9.1.0" apply false
     id("org.jetbrains.kotlin.android") version "2.4.0" apply false
 }

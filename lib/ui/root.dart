@@ -329,7 +329,7 @@ class _RootPageState extends State<RootPage> with WidgetsBindingObserver {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
                       Text(
-                        _client.server.value?.shortName ?? 'SALU Remote',
+                        _client.server.value?.shortName ?? 'Salu',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),

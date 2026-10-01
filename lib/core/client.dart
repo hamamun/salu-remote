@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import '../protocol/remote_protocol.dart';
 import 'connect_failure.dart';
+import 'link_health.dart';
 import 'models.dart';
 import 'prefs.dart';
 import 'reply.dart';
@@ -100,9 +101,11 @@ class _QueuedCommand {
 /// Responsibilities, and deliberately nothing else:
 ///   * one WebSocket, opened to `ws://host:port`, `hello` → `auth` → `auth_ok`;
 ///   * the reconnect loop (backoff, and *no* loop when the PC refused us);
-///   * the keepalive split — socket-level `pingInterval` (+ close events +
-///     network changes) declare the link dead; the app-level `ping` command
-///     only measures latency for the Connect sheet;
+///   * the keepalive split — **silence**, the socket-level `pingInterval`
+///     (+ close events + network changes) declare the link dead; the
+///     app-level `ping` command measures latency *and* proves the PC is
+///     answering; a late or missing answer only ever means *busy*
+///     (`salu_remote.md` Part 7);
 ///   * a request/reply table so `cmd` ids never leak into the UI;
 ///   * the latest [SaluSnapshot], with `rev` monotonicity enforced.
 ///
@@ -127,6 +130,17 @@ class SaluClient {
 
   /// Round-trip time from the last ping, for the Connect sheet's diagnostics.
   final ValueNotifier<int?> latencyMs = ValueNotifier<int?>(null);
+
+  /// **True while the PC has shown it cannot keep up** — a `ping` that went
+  /// unanswered, or a command it refused with `busy` / `too_fast`, or one it
+  /// never answered at all.
+  ///
+  /// This is *advice*, never a verdict: nothing is disconnected for it. The
+  /// read lanes (the Tune panes, the web-media poll, the playlist reader)
+  /// simply stop volunteering work until the PC catches up, which is the one
+  /// thing the phone can do to help a PC that is already behind
+  /// (`salu_remote.md` Part 7).
+  final ValueNotifier<bool> busy = ValueNotifier<bool>(false);
 
   /// Bounded, session-only diagnostics. No tokens, URLs or pairing codes.
   final ValueNotifier<List<String>> disconnectHistory =
@@ -162,6 +176,36 @@ class SaluClient {
   /// Never used to declare the link dead (transport keepalive owns that).
   DateTime? _lastSnapshotAt;
   bool _stallProbeInFlight = false;
+
+  /// The liveness policy — pure, so the rules are unit-testable
+  /// (`test/link_health_test.dart`, `salu_remote.md` Part 7).
+  final LinkHealth health = const LinkHealth();
+
+  /// When the last frame of **any** kind arrived — `state`, `ack`, `pong`,
+  /// even an `error`. This, and only this, is proof of life: while the PC
+  /// keeps talking, it is not dead, however late its answers are.
+  DateTime? _lastInboundAt;
+
+  /// When the app-level `ping` currently awaiting its `pong` went out.
+  DateTime? _pingSentAt;
+
+  /// When the PC last asked for room (a slow, missing or refused answer).
+  DateTime? _lastBusyAt;
+
+  /// Consecutive answers that asked for room. Drives the read lanes' backoff
+  /// and is cleared by the first `pong` inside the budget.
+  int _busyMisses = 0;
+
+  /// Consecutive **retryable** handshake failures — a PC too busy to finish
+  /// `auth` inside its own 5-second clock (Part 3 §7.1.6). Credential
+  /// refusals get no such grace.
+  int _authFailures = 0;
+
+  /// Debounce for "Android says the network vanished": a Wi-Fi handoff
+  /// between access points reads as `none` for a moment, and tearing the
+  /// socket down for that turned a roam into a full reconnect.
+  Timer? _netGraceTimer;
+  static const Duration _netGrace = Duration(milliseconds: 2500);
 
   /// Whether *this* socket has received `hello` yet — [server] keeps the last
   /// PC's details across reconnects for the header, so it cannot answer that.
@@ -212,15 +256,28 @@ class SaluClient {
   String? get host => _host;
   int? get port => _port;
 
-  /// Codes that mean "the user has to do something", not "try again".
-  static const Set<String> _noRetryCodes = <String>{
+  /// Codes that mean **"the user has to do something"** — the PC has looked
+  /// at our credentials and refused them. Retrying would hammer a PC that is
+  /// answering perfectly well, and would hide the one thing the user has to
+  /// know, so the loop stops.
+  static const Set<String> _fatalCodes = <String>{
     'bad_code',
     'bad_token',
     'version_mismatch',
+    'not_paired',
+  };
+
+  /// Codes that mean **"the handshake did not finish"** — which on a busy PC
+  /// is not a refusal at all. The PC reaps any socket that has not sent
+  /// `auth` within 5 seconds of the upgrade (Part 3 §7.1.6), and a PC blocked
+  /// for tens of seconds (Part B §1) misses that clock on every dial. These
+  /// are retried with backoff and only become fatal after
+  /// [LinkHealth.authFailuresBeforePairing] of them in a row
+  /// (`salu_remote.md` Part 7).
+  static const Set<String> _retryableAuthCodes = <String>{
     'auth_timeout',
     'auth_required',
     'auth_failed',
-    'not_paired',
   };
 
   /// Verbs whose effect is an **absolute value**, so replaying after a
@@ -331,23 +388,48 @@ class SaluClient {
       address.value = null;
       _host = null;
       _port = null;
+      // A different PC has a different drive table.
+      _placesReply = null;
+      _placesAddress = null;
     }
   }
 
   /// Android lifecycle resume (and the app's own "the phone just woke up"
   /// path). Never *assume* the socket survived: after a screen-off it can be
-  /// a zombie that still claims to be open. Prove the link with a short
-  /// `state_get`; if it does not answer, tear down and redial at once —
-  /// no waiting out a backoff on a connection that is already gone.
+  /// a zombie that still claims to be open.
+  ///
+  /// **What does not kill it any more (`salu_remote.md` Part 7).** This used
+  /// to prove the link with a 3-second `state_get` and tear the socket down
+  /// the moment that came back late — which is the very thing Part E said
+  /// the phone would stop doing: on a PC that is busy, the resume check
+  /// failed on every screen-on and rebuilt a connection that was perfectly
+  /// alive. Now:
+  ///
+  ///  * a **silent** link (nothing at all since the phone slept) is rebuilt
+  ///    at once, without waiting for a probe;
+  ///  * a **late or missing answer** is left alone — the picture arrives
+  ///    when the PC can send it, and the silence rule owns death;
+  ///  * only a **failed write** (`offline`) proves the socket is a corpse.
   Future<void> onResume() async {
     _startNetWatch();
     if (_socket != null && _authenticated) {
+      if (health.isDead(DateTime.now(), _lastInboundAt)) {
+        debugPrint('[SALU remote] resume: silent since the phone slept'
+            ' — rebuilding now');
+        await _noteDeadSocket(reason: 'resume-silence');
+        return;
+      }
       final RemoteReply reply =
-          await send('state_get', timeout: const Duration(seconds: 3));
-      if (reply.ok) return;
-      if (reply.code == 'timeout' || reply.code == 'offline') {
-        debugPrint(
-            '[SALU remote] resume health check failed (${reply.code}) — redialing');
+          await send('state_get', timeout: const Duration(seconds: 6));
+      if (reply.ok ||
+          reply.code == 'timeout' ||
+          reply.code == RemoteErrorCode.busy) {
+        return; // A slow PC, not a dead one. The snapshot will land.
+      }
+      if (reply.code == 'offline') {
+        // The bytes would not go: this socket is already dead. Redial at
+        // once, with no backoff, rather than waiting out the silence clock.
+        debugPrint('[SALU remote] resume health check could not write — redialing');
         final int generation = _generation;
         await _teardown();
         // Only redial if nothing else (network watcher, user) already took
@@ -374,9 +456,18 @@ class SaluClient {
     _reconnectTimer = null;
     _handshakeTimer?.cancel();
     _handshakeTimer = null;
+    _netGraceTimer?.cancel();
+    _netGraceTimer = null;
     _stopPing();
     _authenticated = false;
     _stallProbeInFlight = false;
+    // There is no socket to be busy about any more; the next one starts
+    // clean. (The drive table survives — see [fsPlaces].)
+    _lastInboundAt = null;
+    _pingSentAt = null;
+    _lastBusyAt = null;
+    _busyMisses = 0;
+    if (busy.value) busy.value = false;
     final StreamSubscription<Object?>? events = _events;
     _events = null;
     final WebSocket? socket = _socket;
@@ -431,17 +522,22 @@ class SaluClient {
       return;
     }
     // **Who declares the link dead — and who does not.**
-    // This socket-level keepalive is the authority: dart:io pings the peer
-    // and closes the socket when the pong is late, entirely at the I/O
-    // layer — it bypasses the PC's ordinary command handling, but a stalled
-    // event loop can still delay transport processing. Together with close events
-    // and the network listener, that is the whole death-detection set. The
-    // app-level `ping` command is a speedometer for the Connect sheet, and
-    // the stall nudge is a freshness request; neither one kills a socket.
-    socket.pingInterval = const Duration(seconds: 10);
+    // Death is *silence*: not one frame of any kind for
+    // `health.silenceLimit` ([_healthTick]). The socket-level keepalive is
+    // the backstop under it, and it is deliberately generous — dart:io sends
+    // a ping after `pingInterval` and closes the socket with `1001` when the
+    // pong is more than another `pingInterval` late, so a tight interval
+    // kills a PC that is merely blocked (Part B §1 measured 10–30 s stalls).
+    // The app-level `ping` is the latency readout *and* the proof of life
+    // while nothing is playing; the stall nudge is a freshness request.
+    // Neither one kills a socket.
+    socket.pingInterval = health.transportPing;
     _dialing = null;
     _socket = socket;
     _socketOpenedAt = DateTime.now();
+    // A new socket starts silent: nothing has proved this one yet.
+    _lastInboundAt = null;
+    _pingSentAt = null;
     _socketErrorType = null;
     _sawHello = false;
     _lastSnapshotAt = null;
@@ -547,6 +643,11 @@ class SaluClient {
   }
 
   void _onFrame(Object? event) {
+    // **Proof of life, before anything else.** A frame arrived, so the PC is
+    // talking: whatever else is true of it, it is not dead. Recorded before
+    // the frame is even understood — an unparseable frame proves the socket
+    // as surely as a snapshot does.
+    _lastInboundAt = DateTime.now();
     if (event is! String) return; // The protocol is text-only, one object per frame.
     Map<String, Object?> message;
     try {
@@ -625,6 +726,9 @@ class SaluClient {
     _pairingCode = null;
     _clearProblem();
     _attempt = 0;
+    // Whatever the PC could not do a moment ago (its 5-second auth clock
+    // reaping a socket it had no time for), it has now done. Start clean.
+    _authFailures = 0;
     link.value = LinkState.online;
     debugPrint('[SALU remote] online with ${server.value?.name ?? 'PC'}');
     // Absolute taps that failed during the gap get their one fresh replay
@@ -648,9 +752,13 @@ class SaluClient {
   void _onPong(Map<String, Object?> message) {
     final int? at = message['at'] is num ? (message['at'] as num).toInt() : null;
     if (at == null) return;
-    // Latency display only. A late pong never kills the link — death is
-    // declared by the socket-level pingInterval and the close event.
-    latencyMs.value = DateTime.now().millisecondsSinceEpoch - at;
+    final DateTime now = DateTime.now();
+    // Latency display, and the proof that the PC is keeping up. A late pong
+    // never kills the link — death is silence ([_healthTick]); it only marks
+    // the PC busy until it answers one inside the budget.
+    latencyMs.value = now.millisecondsSinceEpoch - at;
+    _pingSentAt = null;
+    if (latencyMs.value! <= health.busyAfter.inMilliseconds) _noteResponsive();
   }
 
   void _onResult(Map<String, Object?> message) {
@@ -682,21 +790,50 @@ class SaluClient {
     }
     // No one was waiting: this is an authentication failure, i.e. about the
     // link itself rather than about one command.
-    if (code != null && _noRetryCodes.contains(code)) {
-      debugPrint('[SALU remote] auth failed: $code — $text');
-      problemCode.value = code;
-      problemMessage.value = text;
-      link.value = LinkState.needsPairing;
-      snapshot.value = null;
-      _wanted = false;
-      _retryQueue.clear(); // A new pairing must not inherit the old session's taps.
-      if (code == RemoteErrorCode.badToken) {
-        // The PC forgot this phone. Keeping the token would make every later
-        // attempt fail the same way; dropping it lets the next code pair.
-        unawaited(RemotePrefs.instance.forgetToken());
-      }
-      unawaited(_teardown());
+    if (code != null &&
+        (_fatalCodes.contains(code) || _retryableAuthCodes.contains(code))) {
+      unawaited(_onAuthFailure(code, text));
     }
+  }
+
+  /// The PC would not — or could not — complete the handshake.
+  ///
+  /// Two very different failures arrive here, and telling them apart is the
+  /// whole fix (`salu_remote.md` Part 7):
+  ///
+  /// * **A credential refusal** (`bad_code`, `bad_token`,
+  ///   `version_mismatch`, `not_paired`) is the PC answering a question it
+  ///   understood. Only the user can change the answer, so the loop stops
+  ///   and the Connect sheet says what to do.
+  /// * **A handshake that never finished** (`auth_timeout`, `auth_required`,
+  ///   `auth_failed`, close `4001`) is what a *busy* PC looks like. Its own
+  ///   5-second clock reaped a socket it had no time for; the token is still
+  ///   good and the PC is still there. Back off, dial again, and only ask
+  ///   the user to pair once that has failed
+  ///   [LinkHealth.authFailuresBeforePairing] times in a row.
+  Future<void> _onAuthFailure(String code, String? text) async {
+    final bool fatal = _fatalCodes.contains(code);
+    _authFailures++;
+    if (!fatal && _authFailures < health.authFailuresBeforePairing) {
+      debugPrint('[SALU remote] handshake did not finish ($code,'
+          ' attempt $_authFailures) — retrying');
+      link.value = LinkState.unreachable;
+      if (_wanted) _scheduleReconnect();
+      return;
+    }
+    debugPrint('[SALU remote] auth failed: $code — $text');
+    problemCode.value = code;
+    problemMessage.value = text ?? 'The PC did not accept this phone.';
+    link.value = LinkState.needsPairing;
+    snapshot.value = null;
+    _wanted = false;
+    _retryQueue.clear(); // A new pairing must not inherit the old session's taps.
+    if (code == RemoteErrorCode.badToken) {
+      // The PC forgot this phone. Keeping the token would make every later
+      // attempt fail the same way; dropping it lets the next code pair.
+      unawaited(RemotePrefs.instance.forgetToken());
+    }
+    await _teardown();
   }
 
   void _onClosed() {
@@ -708,9 +845,13 @@ class SaluClient {
         ? null : now.difference(_socketOpenedAt!).inSeconds;
     final int? stateAge = _lastSnapshotAt == null
         ? null : now.difference(_lastSnapshotAt!).inMilliseconds;
+    final int? inboundAge = _lastInboundAt == null
+        ? null : now.difference(_lastInboundAt!).inMilliseconds;
     final String diagnostic = '${now.toIso8601String()} · code ${closeCode ?? 'none'}'
         ' · ${snapshot.value?.mode.name ?? 'unknown'} · auth $wasAuthenticated'
         ' · open ${age ?? '?'}s · state ${stateAge ?? '?'}ms'
+        ' · silent ${inboundAge ?? '?'}ms'
+        ' · busy ${busy.value ? 'yes ($_busyMisses)' : 'no'}'
         ' · pending ${_pending.length} · RTT ${latencyMs.value ?? '?'}ms'
         '${_socketErrorType == null ? '' : ' · $_socketErrorType'}';
     disconnectHistory.value = List<String>.unmodifiable(
@@ -722,6 +863,10 @@ class SaluClient {
     _handshakeTimer?.cancel();
     _handshakeTimer = null;
     _stopPing();
+    // The socket is gone, so nothing it last said is proof of anything any
+    // more. The next one starts silent and has to prove itself again.
+    _lastInboundAt = null;
+    _pingSentAt = null;
     _failPending(RemoteReply.offline());
     debugPrint('[SALU remote] socket closed (code $closeCode'
         '${closeReason == null || closeReason.isEmpty ? '' : ', "$closeReason"'}'
@@ -755,11 +900,17 @@ class SaluClient {
         problemMessage.value = 'The PC has too many remote connections already.';
         break;
       case RemoteCloseCode.unauthorized:
-        if (problemCode.value == null) {
-          problemCode.value = 'auth_failed';
-          problemMessage.value = 'The PC did not accept this phone.';
-        }
-        break;
+        // **The busy-PC trap (Part 7).** `4001` is what the PC sends when
+        // its own 5-second auth clock (§7.1.6) reaps a socket it had no
+        // time for — which on a PC that is blocked for tens of seconds is
+        // every socket. It used to stop the loop dead and demand a re-pair;
+        // now it counts as one handshake hiccup and the phone dials again.
+        unawaited(_onAuthFailure(
+          'auth_failed',
+          "The PC did not accept this phone. Pair again from SALU's"
+          ' Remote panel.',
+        ));
+        return; // [_onAuthFailure] owns the link state from here.
       default:
         if (!wasAuthenticated && problemCode.value == null) {
           // Dropped mid-handshake with no code at all. The PC always says
@@ -773,7 +924,7 @@ class SaluClient {
         }
         break;
     }
-    if (problemCode.value != null && _noRetryCodes.contains(problemCode.value)) {
+    if (problemCode.value != null && _fatalCodes.contains(problemCode.value)) {
       link.value = LinkState.needsPairing;
       snapshot.value = null;
       _wanted = false;
@@ -794,16 +945,17 @@ class SaluClient {
     if (_wanted) _scheduleReconnect();
   }
 
-  /// Backoff: 1 s, 2 s, 3 s, 5 s, 8 s, then every 12 s. A phone that has been
-  /// asleep for an hour must not hammer the PC, and a PC that comes back must
-  /// be picked up within a few seconds.
+  /// Backoff: 1 s, 1 s, 2 s, 3 s, 5 s, 8 s, then every 12 s
+  /// ([LinkHealth.retryDelay]). A phone that has been asleep for an hour must
+  /// not hammer the PC, and a PC that comes back must be picked up within a
+  /// few seconds — so the first two attempts are deliberately quick, and the
+  /// counter only resets on a real `auth_ok`.
   void _scheduleReconnect() {
     if (!_wanted) return;
     _reconnectTimer?.cancel();
-    const List<int> steps = <int>[1, 2, 3, 5, 8, 12];
-    final int seconds = steps[_attempt < steps.length ? _attempt : steps.length - 1];
+    final Duration delay = health.retryDelay(_attempt);
     _attempt++;
-    _reconnectTimer = Timer(Duration(seconds: seconds), () {
+    _reconnectTimer = Timer(delay, () {
       if (_wanted) unawaited(_open());
     });
   }
@@ -829,28 +981,24 @@ class SaluClient {
     // the whole app (the client is a singleton) and starts exactly once.
     Connectivity().onConnectivityChanged.listen(
       (List<ConnectivityResult> results) {
-        final bool up = results.any((ConnectivityResult r) =>
-            r == ConnectivityResult.wifi ||
-            r == ConnectivityResult.ethernet ||
-            r == ConnectivityResult.vpn ||
-            r == ConnectivityResult.other);
-        if (!up) {
+        if (!_netUp(results)) {
           if (_socket != null || _dialing != null) {
-            debugPrint('[SALU remote] network gone — dropping the socket now');
-            final int generation = _generation;
-            unawaited(_teardown().then((_) {
-              // Teardown bumps the generation itself: "mine plus one" means
-              // no newer connection took over during the close (e.g. the
-              // network bounced back and a dial already started).
-              if (_generation != generation + 1 || !_wanted) return;
-              link.value = LinkState.unreachable;
-              _scheduleReconnect();
-            }));
+            // **Not yet.** Android reports `none` for a moment while Wi-Fi
+            // hands off between access points (and while it decides whether
+            // to fall back to mobile data), and killing the socket on that
+            // first word turned a roam the TCP connection would have
+            // survived into a full teardown, a backoff and a re-pair's worth
+            // of work. Wait one beat and ask again (Part 7).
+            _netGraceTimer?.cancel();
+            _netGraceTimer = Timer(_netGrace, () => unawaited(_dropForNetwork()));
           }
           return;
         }
-        // Network is up (or just came back). If we should be connected and
-        // are not — and nothing is already dialing — go now.
+        // Network is up (or just came back): the socket never has to die.
+        _netGraceTimer?.cancel();
+        _netGraceTimer = null;
+        // If we should be connected and are not — and nothing is already
+        // dialing — go now.
         if (_wanted && !isOnline && _socket == null && _dialing == null) {
           debugPrint('[SALU remote] network up — reconnecting immediately');
           _attempt = 0;
@@ -862,16 +1010,50 @@ class SaluClient {
     );
   }
 
-  /// The 5-second house clock. Two jobs, and **killing the link is not one
-  /// of them**:
+  /// Does this list of Android's own networks contain one a LAN remote can
+  /// use? Mobile data does not count: the PC is on the Wi-Fi.
+  static bool _netUp(List<ConnectivityResult> results) =>
+      results.any((ConnectivityResult r) =>
+          r == ConnectivityResult.wifi ||
+          r == ConnectivityResult.ethernet ||
+          r == ConnectivityResult.vpn ||
+          r == ConnectivityResult.other);
+
+  /// The network really is gone — not a blip, but a second look agreed. Now
+  /// the socket can be dropped, so the reconnect loop and its backoff start
+  /// at once instead of waiting out the silence clock on a link that is
+  /// obviously dead.
+  Future<void> _dropForNetwork() async {
+    _netGraceTimer = null;
+    List<ConnectivityResult> again = const <ConnectivityResult>[];
+    try {
+      again = await Connectivity().checkConnectivity();
+    } catch (_) {
+      // A probe that cannot be answered is not proof the network is back.
+    }
+    if (_netUp(again) || _socket == null) return;
+    debugPrint('[SALU remote] network gone — dropping the socket now');
+    final int generation = _generation;
+    await _teardown();
+    // Teardown bumps the generation itself: "mine plus one" means no newer
+    // connection took over during the close (e.g. the network bounced back
+    // and a dial already started).
+    if (_generation != generation + 1 || !_wanted) return;
+    link.value = LinkState.unreachable;
+    _scheduleReconnect();
+  }
+
+  /// The house clock ([LinkHealth.probeInterval]). Three jobs, and **killing
+  /// the link is barely one of them**:
   ///
   ///  * **latency** — one `ping` command, answered by the PC with a `pong`
-  ///    and shown in the Connect sheet. A late pong means the PC is busy;
-  ///    death is declared by the socket-level `pingInterval`, the close
-  ///    event, and the network listener — never by this clock. (The old
-  ///    rule — tear the socket down after 12 s without an app-level pong —
-  ///    made every PC-side stall look like a dead network, and contradicted
-  ///    the 15–30 s grace the phone gives its own slow commands.)
+  ///    and shown in the Connect sheet. A late pong means the PC is busy,
+  ///    nothing more: it moves [busy] and nothing else. (The old rule —
+  ///    tear the socket down after 12 s without an app-level pong — made
+  ///    every PC-side stall look like a dead network, and contradicted the
+  ///    15–30 s grace the phone gives its own slow commands.)
+  ///  * **proof of life** — the `pong` (or any other frame) resets the
+  ///    silence clock, which is the *only* thing that declares death here.
   ///  * **stall nudge** — while the PC reports it is *playing*, snapshots
   ///    arrive every ~250 ms (`remote.md` §7.2). If they stop for a few
   ///    seconds, one `state_get` asks for a fresh picture instead of
@@ -879,7 +1061,7 @@ class SaluClient {
   ///    "detect a stalled link", made real).
   void _startPing() {
     _stopPing();
-    _pingTimer = Timer.periodic(const Duration(seconds: 5), (Timer timer) {
+    _pingTimer = Timer.periodic(health.probeInterval, (Timer timer) {
       if (!_authenticated) return;
       final DateTime now = DateTime.now();
       _write(<String, Object?>{
@@ -889,15 +1071,82 @@ class SaluClient {
         'verb': 'ping',
         'args': <String, Object?>{'at': now.millisecondsSinceEpoch},
       });
+      // Only one ping is ever owed: the next tick supersedes this one, so a
+      // PC that answers every other ping is still answering often enough.
+      _pingSentAt ??= now;
+      _healthTick(now);
       _stallNudge(now);
     });
   }
+
+  /// The one place the phone decides the link is dead — and the one place it
+  /// decides the PC is merely busy (`salu_remote.md` Part 7).
+  ///
+  /// **Busy** is an unanswered `ping` older than [LinkHealth.busyAfter]:
+  /// the PC is behind, so the read lanes stop volunteering work until it
+  /// catches up. Nothing is disconnected for it.
+  ///
+  /// **Dead** is silence — not one frame of any kind for
+  /// [LinkHealth.silenceLimit]. A PC that is still pushing snapshots is
+  /// alive however late its answers are, so this is the one rule that can
+  /// survive a PC stalled for tens of seconds and still catch a link that is
+  /// really gone.
+  void _healthTick(DateTime now) {
+    // The hold has run out and the PC has been answering since: let the
+    // read lanes back in.
+    if (busy.value && !health.isHolding(now, _lastBusyAt)) {
+      _busyMisses = 0;
+      _lastBusyAt = null;
+      busy.value = false;
+    }
+    // **Silence wins.** A link that says nothing at all is dead even if a
+    // ping happens to be outstanding — otherwise a socket that died with its
+    // ping unanswered would be "busy" forever and never rebuilt.
+    if (health.isDead(now, _lastInboundAt)) {
+      debugPrint(
+          '[SALU remote] silent for ${now.difference(_lastInboundAt!).inSeconds}s'
+          ' — rebuilding the link');
+      unawaited(_noteDeadSocket(reason: 'silent'));
+      return;
+    }
+    // Alive, but behind: keep the read lanes off it for a breath.
+    if (health.isBusy(now, _pingSentAt)) _noteBusy(now);
+  }
+
+  /// The PC is behind: a `ping` it has not answered, or a command it
+  /// refused with `busy` / `too_fast`, or one it never answered at all.
+  /// Recorded so the read lanes can give it room — never to disconnect it.
+  void _noteBusy(DateTime now) {
+    if (!busy.value) {
+      busy.value = true;
+      debugPrint('[SALU remote] the PC is behind — the read lanes are giving'
+          ' it room (the link stays up)');
+    }
+    _lastBusyAt = now;
+    if (_busyMisses < 1000) _busyMisses++;
+  }
+
+  /// The PC caught up: a `pong` inside the budget. One clean answer clears
+  /// the count; the hold in [_healthTick] keeps the flag up for one breath
+  /// so the lanes do not stampede straight back.
+  void _noteResponsive() {
+    _busyMisses = 0;
+    _lastBusyAt = null;
+    if (busy.value) busy.value = false;
+  }
+
+  /// True while the PC has shown it cannot keep up. The read lanes ask this
+  /// before every voluntary read.
+  bool get pcBusy => busy.value;
 
   /// Playing means a snapshot every ~250 ms. A few seconds of silence while
   /// the position should be moving is a stall — ask for the picture. If the
   /// PC is merely busy, the ask waits its turn and the link stays up; a
   /// genuinely dead socket is already handled by `pingInterval`.
   void _stallNudge(DateTime now) {
+    // A PC that has just told us it cannot keep up does not need another
+    // question. Wait for it to answer a ping inside the budget (Part 7).
+    if (pcBusy) return;
     final SaluSnapshot? snap = snapshot.value;
     if (snap == null || snap.playback.state != TransportState.playing) return;
     final DateTime? last = _lastSnapshotAt;
@@ -965,9 +1214,9 @@ class SaluClient {
   /// A write failed on a socket that still claimed to be open (or a health
   /// check came back empty). Rebuild at once instead of waiting out the
   /// keepalive clock. The last snapshot stays on screen — only the dot moves.
-  Future<void> _noteDeadSocket() async {
+  Future<void> _noteDeadSocket({String reason = 'write'}) async {
     if (_socket == null) return;
-    debugPrint('[SALU remote] write failed on an open socket — rebuilding it now');
+    debugPrint('[SALU remote] link declared dead ($reason) — rebuilding it now');
     final int generation = _generation;
     await _teardown();
     // Teardown bumps the generation itself: "mine plus one" means no newer
@@ -1050,9 +1299,15 @@ class SaluClient {
           message: 'That request is too big to send in one message.',
         );
       }
-      return await pending.completer.future.timeout(timeout);
+      final RemoteReply reply = await pending.completer.future.timeout(timeout);
+      // The PC asking for room is a fact about the PC, not about the link:
+      // remember it so the read lanes stop volunteering work for a breath
+      // ([busy]). Nothing is disconnected for it (Part 7).
+      if (health.isBusyAnswer(reply.code)) _noteBusy(DateTime.now());
+      return reply;
     } on TimeoutException {
       _pending.remove(id);
+      _noteBusy(DateTime.now());
       // Deliberately **not** queued: a timeout is ambiguous (the PC may
       // still execute it late), and the replay window is for real offline
       // gaps only. The caller shows the timeout; the next snapshot tells
@@ -1118,7 +1373,35 @@ class SaluClient {
       send('queue_group_set', args: <String, Object?>{'by': by});
 
   // Files — read-only, and only when the PC's `remote_file_access` is on.
-  Future<RemoteReply> fsPlaces() => send('fs_places');
+  /// The PC's drives, asked for **once per PC per session** — and never
+  /// again just because a screen was rebuilt (`salu_remote.md` Part 7).
+  ///
+  /// `fs_places` is the one verb that has made the PC stop answering
+  /// *anything*: a disconnected mapped drive letter used to cost it 10–30
+  /// seconds each (Part B §1), and the files browser is rebuilt every time
+  /// the snapshot comes back after a gap — so the old code re-armed that
+  /// stall on every drop, inside the very window in which the link looked
+  /// dead. That is a loop: the request makes the PC busy, being busy looks
+  /// like a dead link, the drop rebuilds the screen, and the screen asks
+  /// again. A PC's drive table does not change while it is running, so the
+  /// answer is cached and only re-asked when the user pulls for it.
+  RemoteReply? _placesReply;
+  String? _placesAddress;
+
+  Future<RemoteReply> fsPlaces({bool refresh = false}) async {
+    final String? where =
+        _host == null || _port == null ? null : '$_host:$_port';
+    if (!refresh && _placesReply != null && _placesAddress == where) {
+      return _placesReply!;
+    }
+    final RemoteReply reply =
+        await send('fs_places', timeout: const Duration(seconds: 20));
+    if (reply.ok) {
+      _placesReply = reply;
+      _placesAddress = where;
+    }
+    return reply;
+  }
   Future<RemoteReply> fsList(
     String path, {
     int from = 0,

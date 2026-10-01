@@ -258,6 +258,15 @@ class _ConnectSheetState extends State<ConnectSheet> {
                         value: ms == null ? '—' : '$ms ms',
                       ),
                     ),
+                    ValueListenableBuilder<bool>(
+                      valueListenable: _client.busy,
+                      builder: (BuildContext context, bool busy, _) => FactRow(
+                        label: 'PC load',
+                        value: busy
+                            ? 'Busy — the remote is giving it room'
+                            : 'Keeping up',
+                      ),
+                    ),
                     FactRow(label: 'This phone', value: RemotePrefs.instance.deviceName),
                   ],
                 ),

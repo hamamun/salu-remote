@@ -26,7 +26,7 @@ One exception worth knowing: `pc_part.md §11` in a code comment means **Part 5 
 | Browse (Files · Streams), Tune (EQ · Subs · Audio) | built | built |
 | Web mode: page player, tabs, saved pages, Home, one fullscreen seat, trackpad | built, feature-flagged | Part A + Part C — **acceptance on the user's PC pending** |
 | Sleep PC / Shut down PC in ⋮ | built, gated on `pc_power` | Part D — **acceptance pending** |
-| Connection reliability (heartbeat, stall nudge, replay) | built | Part E — **acceptance pending** |
+| Connection reliability (heartbeat, stall nudge, replay) | built, **revised 2026-09-30 — Part 7** | Part E applied; Part G — **not yet started** |
 | Large playlists + capability-gated grouping | built, gated on `queue_groups_paged` | Part F — **implementation pending** |
 
 ## Contents
@@ -37,6 +37,8 @@ One exception worth knowing: `pc_part.md §11` in a code comment means **Part 5 
 - **Part 4** — APK interface design (§1 – §13) *(was `remote_apk_ui.md`)*
 - **Part 5** — PC work orders for `hamamun/Salu` (Parts A – F) *(was `pc_part.md`)*
 - **Part 6** — Audit: this file against the code (2026-09-30)
+- **Part 7** — Connection reliability, round two: the busy PC (2026-09-30) *(hand-written — see its note)*
+- **Part 8** — Change log *(hand-written)*
 
 ### Contents of Part 1 — This repository — what it is, how to build it, what breaks
 
@@ -672,7 +674,7 @@ Open Android Studio → `File` → `Open…` → choose your `salu-remote` folde
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
 
     <application
-        android:label="SALU Remote"
+        android:label="Salu"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">
@@ -4919,7 +4921,7 @@ These two blocks are **read from disk at compile time**, so they cannot be older
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
 
     <application
-        android:label="SALU Remote"
+        android:label="Salu"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">
@@ -5095,3 +5097,180 @@ Stated plainly, because an audit that hides its own blind spot is worse than non
 - **`flutter analyze` and `flutter test` were not run.** This sandbox has no Flutter or Dart SDK, and the download is blocked at the TLS layer — the same limitation Part 5 A10 and F5 already record for the phone side. Everything in 6.1–6.4 is a **static** reading of the source: grep and parse, no compilation, no test run. The 13 files in `test/` are described, not executed.
 - **Nothing on the PC side was verified at all.** `hamamun/Salu` is not in this checkout, so Parts 3 and 5 are reproduced as written. Their *"implementation record"* tables say the work landed in that repository; that claim could not be checked here and is not endorsed by this audit.
 - **The live behaviours are still open.** YouTube actually going fullscreen from the phone, the PC cursor moving under a thumb, sleep/wake reconnection — those are the acceptance checklists in Part 5 (A8, C6.6, E8, F5) and they need the user's own Windows PC and a paired phone.
+
+---
+
+# Part 7 · Connection reliability, round two — the busy PC (2026-09-30)
+
+> **Hand-written, and deliberately outside the compiler.** `tool_compile_doc.py`
+> produces Parts 1–6 from the five original documents; this Part is written
+> against the code as it stands today, so re-running that script would drop
+> it. Re-add it, or promote it into the script's `PARTS` list, before relying
+> on a rebuild.
+
+> **Why this exists — the user's words, three weeks after Part E:** *"still its
+> happening and remian busy"*, and, asked when: **while the app is open on
+> screen**, with **the remote's UI lagging**, **the blue activity dot on**, and
+> **the link reconnecting**. Not after the phone slept. Not after the PC slept.
+> In the hand, in use.
+
+Part E fixed *who declares death*: the transport, not a command that came back
+late. That was right, and it was not enough, because the transport rule itself
+was still built on an assumption this PC violates. Everything below was
+confirmed by reading the sources on both sides — `lib/core/client.dart` here,
+and `hamamun/Salu` at `561bd50` (`lib/core/remote/remote_service.dart`,
+`remote_command_handler.dart`, `queue_grouping_cache.dart`).
+
+## 7.1 The four mechanisms that were still dropping the link
+
+| # | Mechanism | Where it lived | Why it bit |
+|---|---|---|---|
+| 1 | **`pingInterval` is a deadline, not a cadence.** Dart sends a ping after `pingInterval` and closes the socket with `1001` when the pong is more than another `pingInterval` late (`sdk/lib/_http/websocket_impl.dart`, `set pingInterval`). At 10 s the phone demanded a protocol-level pong inside 10 s — **inside the window a PC blocked for 10–30 s (Part B §1) cannot answer at all.** | `client.dart` `_open()` | The user's PC has many disconnected mapped drives. Any stall long enough to delay the pong was answered by the phone tearing the link down. |
+| 2 | **A frame is not an answer, but an answer is not the only frame.** dart:io's pong timer is reset only by a **PONG** frame. A PC pushing snapshots at 4/s while too busy to answer a command was killed anyway, because it never wrote the pong. | same | Directly contradicts Part E2's own rule: *command-path delays are not evidence of a dead link.* |
+| 3 | **A busy PC looks like an unpaired one.** The PC reaps any socket that has not completed `auth` within 5 s (`remote_service.dart` `_authTimer`, Part 3 §7.1.6) with `auth_timeout` + close `4001`. `auth_timeout` and `auth_failed` were both in the phone's *_noRetryCodes* set, so one stalled handshake stopped the loop dead and demanded a re-pair — of a token that was still perfectly good. | `client.dart` `_noRetryCodes` | The worst possible failure mode: the PC gets busier, so the phone gives up on it. |
+| 4 | **The phone kept re-arming the stall.** `fs_places` is the one verb that has blocked this PC for tens of seconds. The files browser is rebuilt whenever the snapshot returns after a gap, and `initState` asked for the drive table again — so: request → PC stalls → looks dead → drop → screen rebuilds → request. A closed loop. | `files_browser.dart` `_loadPlaces()` | Each turn of the loop re-created the evidence that justified the next turn. |
+
+Two smaller ones, same family:
+
+- **Resume killed healthy sockets.** `onResume()` proved the link with a
+  3-second `state_get` and tore the socket down when it came back late — the
+  one place the phone still punished a slow answer as if it were a dead link.
+- **A Wi-Fi roam killed healthy sockets.** Android reports `none` while Wi-Fi
+  hands off between access points, and the network watcher dropped the socket
+  on that first word.
+
+## 7.2 The rule now, in two sentences
+
+Everything lives in one pure class, `lib/core/link_health.dart`, so it is
+testable without a socket (`test/link_health_test.dart`):
+
+- **Dead = silence.** Not one frame of *any* kind — `state`, `ack`, `pong`,
+  even an unparseable frame — for **25 s**. Any frame resets the clock, so a
+  PC that is still talking is never killed for being slow.
+- **Busy = slow answers.** An unanswered `ping` older than **2 s**, or a
+  command the PC refused with `busy` / `too_fast` (Part 3 §7.3, §17.8), or one
+  that timed out. Nothing is *ever* disconnected for this.
+
+| Knob | Was | Now | Why |
+|---|---|---|---|
+| transport `pingInterval` | 10 s | **25 s** | Backstop only. Must never fire on a PC that is merely blocked. |
+| death declared by | missing pong (≈20 s) | **silence (25 s)** | 5 s slower on a genuinely dead link, infinitely more forgiving of a stalled one. |
+| app `ping` | 5 s, killed the link | 5 s, measures latency **and** proves life | It is the proof of life while nothing is playing. |
+| `state_get` on resume | 3 s, teardown on timeout | 6 s, **no teardown** | A late answer is a slow PC. Silence, or a failed write, is a dead one. |
+| network gone | teardown at once | **2.5 s grace, then re-check** | Survives AP handoffs and mobile-data flapping. |
+| `auth` hiccup | stop, ask to re-pair | **retry ×3, then stop** | Only a credential refusal (`bad_code`, `bad_token`, …) stops on the first one. |
+| dial backoff | 1·2·3·5·8·12 s | 1·1·2·3·5·8·12 s | A PC that comes back is picked up within a second. |
+
+`_onClosed`'s close-code switch lost one behaviour worth naming: **close `4001`
+no longer stops the loop.** It is routed through `_onAuthFailure()` with the
+other retryable handshake failures. `4002`, `4003`, `bad_code`, `bad_token` and
+`version_mismatch` still stop it — those are answers, not stalls.
+
+## 7.3 What the phone stopped asking for
+
+A remote cannot make a busy PC faster, but it can stop adding to the queue.
+Every change below is work the phone volunteered, not work a thumb asked for:
+
+| Load | Was | Now |
+|---|---|---|
+| Tune panes (EQ · Subs · Audio) | 1 read/s each, unconditionally | **1 read / 2 s**, and skipped entirely while the PC is flagged busy |
+| Web-media poll | 1/s, unconditionally | 1/s, skipped while busy, refreshed the moment it clears |
+| Playlist read lane | 100 ms between pages (**10 reads/s**) | **200 ms (5/s)**, and the lane *yields* while the PC is flagged busy (bounded at 10 s, so a playlist still arrives) |
+| Stall nudge (`state_get`) | every 5 s while snapshots stall | skipped while the PC is flagged busy |
+| `fs_places` | on every rebuild of the files browser | **once per PC per session**; the user's "Try again" forces it |
+
+Context for the playlist row: the PC's whole budget is **30 commands/second**
+(Part 3 §7.3) and the trackpad alone spends 25 of those (Part 5 C3). A read
+lane taking ten a second left almost nothing for the thumb — which is why
+interactive controls came back `busy` while a 50,000-channel list loaded.
+
+## 7.4 What the user can see
+
+- The Connect sheet gained a **PC load** row: *"Keeping up"* or *"Busy — the
+  remote is giving it room"*. That is the flag the read lanes obey, so the
+  screen now agrees with the behaviour.
+- Every entry in **Connection history** carries `silent <ms>` and
+  `busy yes/no` alongside the close code, so a drop can be told apart from a
+  stall after the fact — the thing Part 5 F4.5 asked both logs to be able to
+  do.
+
+## 7.5 What `hamamun/Salu` still owes (Part G)
+
+Small, and all of it in `lib/core/remote/remote_service.dart`. None of it
+needs a protocol change.
+
+- **G1 — `ping` must not spend the rate-limit budget.** `_message()` counts the
+  command into `_commands` *before* the E1 shortcut answers it, so during a
+  trackpad drag (25 moves/s) a `ping` can be dropped with `too_fast` — and the
+  phone then marks the PC busy for no reason. Answer `ping`, then count, or do
+  not count it.
+- **G2 — the 5-second auth reap is too tight for a stalled machine.** Raise it
+  to ~10 s, or exempt a socket that has already delivered a well-formed `auth`
+  frame (the PC is busy, not being probed). Every `auth_timeout` costs a
+  reconnect cycle and, after three, a re-pair prompt the user has to dismiss.
+- **G3 — `socket.pingInterval = 20 s` is the same deadline trap, mirrored.**
+  dart:io will close a phone whose own event loop has been busy for 20 s.
+  30 s costs nothing; the phone's silence rule is the one that matters now.
+- **G4 — log the split.** `remote_connection_log.dart` records last frame and
+  last heartbeat; add *last command answered* and *snapshot cadence*, so the
+  two logs can be lined up and a stall can be proved rather than guessed at
+  (Part 5 F4.5).
+
+## 7.6 Acceptance checklist — the user's own PC, in this order
+
+1. **The stall test.** With nothing playing, open a folder on the PC that
+   contains a disconnected mapped drive (or any known-slow scan). The phone's
+   header dot must stay green; **no** "Reconnecting…", **no** re-pair prompt.
+   The Connect sheet's *PC load* row may read *Busy*.
+2. **The recovery test.** Let the PC finish the scan. The phone's panes refresh
+   on their own within a couple of seconds; *PC load* returns to *Keeping up*.
+3. **The roam test.** Walk between two access points with the remote open. No
+   reconnect cycle (a cycle is visible as a new *Connection history* entry).
+4. **The screen-off test.** Lock and unlock the phone while a video plays. The
+   picture returns within a frame or two; the log shows no
+   `link declared dead`.
+5. **The dead-link test.** Close SALU on the PC. The phone notices within about
+   25 s, shows *Reconnecting…*, and reconnects within a second of SALU
+   reopening — no re-pair.
+6. **The pairing test.** Type a wrong pairing code on purpose. It must still
+   fail immediately, with *"That pairing code is not valid"*, and must **not**
+   retry — the one behaviour that must not have become more patient.
+
+## 7.6a What this Part could not check
+
+`flutter analyze` and `flutter test` were **not run** — this sandbox has no
+Flutter or Dart SDK and the download is blocked at the TLS layer, the same
+limitation Part 6.5 records. `test/link_health_test.dart` is written, not
+executed; treat it as a specification of the policy with the same standing as
+the policy's prose until it has been run once on a machine with the SDK.
+
+---
+
+# Part 8 · Change log
+
+> Also hand-written, for the same reason as Part 7: `tool_compile_doc.py`
+> produces Parts 1–6 only.
+
+## 8.1 2026-10-01 — the app is called **Salu**
+
+The phone app's name on the device is now `Salu`, not `SALU Remote`. Four
+places carry it, and all four have to agree or the app ends up with one name
+on the home screen and another in the task switcher:
+
+| Where the user sees it | File | Was | Now |
+|---|---|---|---|
+| Home screen / app drawer, and Android's "Open with…" chooser for `salu://pair` | `android/app/src/main/AndroidManifest.xml` (`android:label`) | `SALU Remote` | `Salu` |
+| The task switcher ("recent apps") — Flutter's `Title` widget takes this from `MaterialApp.title` at **runtime**, so the manifest alone is not enough | `lib/main.dart` | `SALU Remote` | `Salu` |
+| The header's own line, while no PC name is known yet | `lib/ui/root.dart` | `SALU Remote` | `Salu` |
+| (the widget test that asserts that header line) | `test/widget_test.dart` | `SALU Remote` | `Salu` |
+
+Both copies of the manifest inside this document were updated with it: the
+setup sample in Part 2 §4.1 and the verbatim copy in Part 6.3.
+
+**Deliberately left alone:** the sentences that *talk about* the app rather
+than name it — *"Update SALU Remote — the PC speaks a different version."*
+(`error_copy.dart`, `client.dart`), *"That address is not a SALU Remote."*,
+*"…it did not speak SALU Remote"*, and the `Open with SALU Remote` comments.
+They are instructions, and "Update Salu" would be ambiguous between the
+phone app and the PC app, which is also called SALU. Say the word if you
+want them renamed too; `test/connect_failure_test.dart` asserts one of them.

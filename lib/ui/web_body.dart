@@ -124,6 +124,7 @@ class _WebBodyState extends State<WebBody> {
   void initState() {
     super.initState();
     _client.link.addListener(_onLink);
+    _client.busy.addListener(_onBusy);
     widget.activeTab.addListener(_onActive);
     _onActive();
     WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_pollOnce()));
@@ -172,9 +173,20 @@ class _WebBodyState extends State<WebBody> {
   @override
   void dispose() {
     _client.link.removeListener(_onLink);
+    _client.busy.removeListener(_onBusy);
     widget.activeTab.removeListener(_onActive);
     _poll?.cancel();
     super.dispose();
+  }
+
+  /// The PC caught up after being busy: read the page's player now instead
+  /// of waiting out the rest of the tick, so the controls do not sit on
+  /// pre-stall values (`salu_remote.md` Part 7).
+  void _onBusy() {
+    if (_client.pcBusy) return;
+    if (widget.activeTab.value == WebBody.tabIndex && _client.isOnline) {
+      unawaited(_pollOnce());
+    }
   }
 
   void _onLink() {
@@ -206,6 +218,10 @@ class _WebBodyState extends State<WebBody> {
         !widget.snapshot.web.hasTabs) {
       return;
     }
+    // A PC that has just said it cannot keep up does not need the page's
+    // player probed again on the beat. Skip it; [_onBusy] reads the page as
+    // soon as the PC answers a ping inside the budget again (Part 7).
+    if (_client.pcBusy) return;
     final int generation = _pollGeneration;
     _polling = true;
     try {

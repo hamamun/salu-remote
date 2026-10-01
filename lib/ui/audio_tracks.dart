@@ -46,6 +46,7 @@ class _AudioTracksPaneState extends State<AudioTracksPane> {
     super.initState();
     widget.activeTab.addListener(_onActive);
     _client.link.addListener(_onLink);
+    _client.busy.addListener(_onBusy);
     _syncPolling();
     if (widget.activeTab.value == widget.myIndex && _client.isOnline) {
       unawaited(_load());
@@ -74,6 +75,7 @@ class _AudioTracksPaneState extends State<AudioTracksPane> {
   void dispose() {
     widget.activeTab.removeListener(_onActive);
     _client.link.removeListener(_onLink);
+    _client.busy.removeListener(_onBusy);
     _refreshTimer?.cancel();
     _tracksScroll.dispose();
     super.dispose();
@@ -89,8 +91,8 @@ class _AudioTracksPaneState extends State<AudioTracksPane> {
   }
 
   void _syncPolling() {
-    // Only poll what can answer: while the link is down, a 1/s timer would
-    // just paint "Not connected" errors over the pane every second.
+    // Only poll what can answer: while the link is down, a timer would just
+    // paint "Not connected" errors over the pane on every beat.
     if (widget.activeTab.value == widget.myIndex && _client.isOnline) {
       _startPolling();
     } else {
@@ -108,10 +110,31 @@ class _AudioTracksPaneState extends State<AudioTracksPane> {
   }
 
   void _startPolling() {
+    // Two seconds, not one (`salu_remote.md` Part 7): the track list only
+    // changes when the media changes, which the snapshot already announces —
+    // so the poll is a safety net, and a safety net does not need to ask
+    // sixty times a minute.
     _refreshTimer ??= Timer.periodic(
-      const Duration(seconds: 1),
-      (_) => unawaited(_load()),
+      const Duration(seconds: 2),
+      (_) => _tick(),
     );
+  }
+
+  void _tick() {
+    // A PC that has just said it cannot keep up does not need another
+    // question. Skip the beat; [_onBusy] refreshes the pane the moment the
+    // PC answers a ping inside the budget again.
+    if (_client.pcBusy) return;
+    unawaited(_load());
+  }
+
+  /// The PC caught up: refresh at once instead of waiting out the rest of
+  /// the tick, so the pane is never left on pre-stall values.
+  void _onBusy() {
+    if (_client.pcBusy) return;
+    if (widget.activeTab.value == widget.myIndex && _client.isOnline) {
+      unawaited(_load());
+    }
   }
 
   void _stopPolling() {

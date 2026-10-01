@@ -119,12 +119,16 @@ class _FilesBrowserState extends State<FilesBrowser> {
 
   // ── loading ──────────────────────────────────────────────────────────────
 
-  Future<void> _loadPlaces() async {
+  /// [refresh] is for the user's own "Try again" — the drive table itself is
+  /// cached by the client, because asking again is what makes a PC with
+  /// disconnected mapped drives stop answering anything at all
+  /// (`salu_remote.md` Part 7).
+  Future<void> _loadPlaces({bool refresh = false}) async {
     setState(() {
       _placesLoading = true;
       _placesError = null;
     });
-    final RemoteReply reply = await _client.fsPlaces();
+    final RemoteReply reply = await _client.fsPlaces(refresh: refresh);
     if (!mounted) return;
     if (reply.ok) {
       setState(() {
@@ -463,7 +467,7 @@ class _FilesBrowserState extends State<FilesBrowser> {
           EmptyState(
             message: _placesError!,
             actionLabel: 'Try again',
-            onAction: () => unawaited(_loadPlaces()),
+            onAction: () => unawaited(_loadPlaces(refresh: true)),
           ),
         ],
       );

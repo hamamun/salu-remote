@@ -61,7 +61,11 @@ class _QueueCardState extends State<QueueCard> {
 
   final SaluClient _client = SaluClient.instance;
   late final QueueReader _reader = QueueReader(
-      (verb, args) => _client.send(verb, args: args));
+    (verb, args) => _client.send(verb, args: args),
+    // The playlist read is voluntary work: while the PC says it cannot keep
+    // up, the lane waits instead of asking (`salu_remote.md` Part 7).
+    blocked: () => _client.pcBusy,
+  );
   bool _settingGrouping = false;
   bool _followCurrent = true;
   bool get _pagedGroups => _client.supports(RemoteFeature.queueGroupsPaged);

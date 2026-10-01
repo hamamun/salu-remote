@@ -12,7 +12,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // The header before a first connection.
-    expect(find.text('SALU Remote'), findsOneWidget);
+    expect(find.text('Salu'), findsOneWidget);
     expect(find.text('Not connected'), findsOneWidget);
 
     // The connect sheet is up (first launch rule).

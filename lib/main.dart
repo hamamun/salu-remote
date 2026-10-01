@@ -35,7 +35,7 @@ class SaluRemoteApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'SALU Remote',
+      title: 'Salu',
       debugShowCheckedModeBanner: false,
       theme: SaluTheme.build(),
       home: const RootPage(),

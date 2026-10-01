@@ -38,6 +38,7 @@ One exception worth knowing: `pc_part.md §11` in a code comment means **Part 5 
 - **Part 5** — PC work orders for `hamamun/Salu` (Parts A – F) *(was `pc_part.md`)*
 - **Part 6** — Audit: this file against the code (2026-09-30)
 - **Part 7** — Connection reliability, round two: the busy PC (2026-09-30) *(hand-written — see its note)*
+- **Part 8** — Change log *(hand-written)*
 
 ### Contents of Part 1 — This repository — what it is, how to build it, what breaks
 
@@ -673,7 +674,7 @@ Open Android Studio → `File` → `Open…` → choose your `salu-remote` folde
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
 
     <application
-        android:label="SALU Remote"
+        android:label="Salu"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">
@@ -4920,7 +4921,7 @@ These two blocks are **read from disk at compile time**, so they cannot be older
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
 
     <application
-        android:label="SALU Remote"
+        android:label="Salu"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">
@@ -5242,3 +5243,34 @@ Flutter or Dart SDK and the download is blocked at the TLS layer, the same
 limitation Part 6.5 records. `test/link_health_test.dart` is written, not
 executed; treat it as a specification of the policy with the same standing as
 the policy's prose until it has been run once on a machine with the SDK.
+
+---
+
+# Part 8 · Change log
+
+> Also hand-written, for the same reason as Part 7: `tool_compile_doc.py`
+> produces Parts 1–6 only.
+
+## 8.1 2026-10-01 — the app is called **Salu**
+
+The phone app's name on the device is now `Salu`, not `SALU Remote`. Four
+places carry it, and all four have to agree or the app ends up with one name
+on the home screen and another in the task switcher:
+
+| Where the user sees it | File | Was | Now |
+|---|---|---|---|
+| Home screen / app drawer, and Android's "Open with…" chooser for `salu://pair` | `android/app/src/main/AndroidManifest.xml` (`android:label`) | `SALU Remote` | `Salu` |
+| The task switcher ("recent apps") — Flutter's `Title` widget takes this from `MaterialApp.title` at **runtime**, so the manifest alone is not enough | `lib/main.dart` | `SALU Remote` | `Salu` |
+| The header's own line, while no PC name is known yet | `lib/ui/root.dart` | `SALU Remote` | `Salu` |
+| (the widget test that asserts that header line) | `test/widget_test.dart` | `SALU Remote` | `Salu` |
+
+Both copies of the manifest inside this document were updated with it: the
+setup sample in Part 2 §4.1 and the verbatim copy in Part 6.3.
+
+**Deliberately left alone:** the sentences that *talk about* the app rather
+than name it — *"Update SALU Remote — the PC speaks a different version."*
+(`error_copy.dart`, `client.dart`), *"That address is not a SALU Remote."*,
+*"…it did not speak SALU Remote"*, and the `Open with SALU Remote` comments.
+They are instructions, and "Update Salu" would be ambiguous between the
+phone app and the PC app, which is also called SALU. Say the word if you
+want them renamed too; `test/connect_failure_test.dart` asserts one of them.
